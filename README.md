@@ -1,7 +1,7 @@
 # check_ddwrt_tomato
 nagios check for routers running DD-WRT or Tomato firmware
 
-# This is a nagios script that will SSH into a router # running DD-WRT or Tomato firmware and perform the following checks: 
+his is a nagios script that will SSH into a router # running DD-WRT or Tomato firmware and perform the following checks: 
 - name resolution exists for router
 - remote HTTP management is disabled
 - remote SSH  management is enabled
