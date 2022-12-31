@@ -29,26 +29,26 @@
 # -----------------
 #  validate that the remote syslog host is actually receiving syslog entries
 #  validate that the remote NTP host is actually providing valid time updates
-
+#  consider replacing perl modules with /usr/bin/ssh to eliminate dependency
 
 
 
 
 # CHANGE LOG
 # ----------
-#  2010/06/23	Nick Jeffrey	Script created to check DD-WRT routers
-#  2011/06/16	Nick Jeffrey	Enhancements and bug fixes
-#  2013/03/14	Nick Jeffrey	Change ssh login timeout from 5 seconds to 30 seconds
-#  2013/03/15	Nick Jeffrey	Add capabilities to check routers running Tomato firmware
-#  2013/03/15	Nick Jeffrey	Add checks for SNMP daemon
-#  2013/03/20	Nick Jeffrey	Add checks for scheduled daily reboot between midnight-8am
-#  2013/03/20	Nick Jeffrey	Add checks for NTP time synchronization
-#  2013/03/20	Nick Jeffrey	Confirm Internet access by checking ping reply from WAN gateway
-#  2013/03/21	Nick Jeffrey	Formatting cleanup
-#  2013/06/17	Nick Jeffrey	Bug fix for Tomato remote web access
-#  2013/06/17	Nick Jeffrey	Only check for DNS servers on router if DHCP server is enabled
-#  2013/06/17	Nick Jeffrey	Bug fix for Tomato WAN DNS servers
-#  2013/07/29   Nick Jeffrey    Change IP address of example.com from 192.0.43.10 to 93.184.216.119
+#  2010/06/23	njeffrey	   Script created to check DD-WRT routers
+#  2011/06/16	njeffrey	   Enhancements and bug fixes
+#  2013/03/14	njeffrey	   Change ssh login timeout from 5 seconds to 30 seconds
+#  2013/03/15	njeffrey	   Add capabilities to check routers running Tomato firmware
+#  2013/03/15	njeffrey	   Add checks for SNMP daemon
+#  2013/03/20	njeffrey	   Add checks for scheduled daily reboot between midnight-8am
+#  2013/03/20	njeffrey	   Add checks for NTP time synchronization
+#  2013/03/20	njeffrey	   Confirm Internet access by checking ping reply from WAN gateway
+#  2013/03/21	njeffrey	   Formatting cleanup
+#  2013/06/17	njeffrey	   Bug fix for Tomato remote web access
+#  2013/06/17	njeffrey	   Only check for DNS servers on router if DHCP server is enabled
+#  2013/06/17	njeffrey	   Bug fix for Tomato WAN DNS servers
+#  2013/07/29 njeffrey    Change IP address of example.com from 192.0.43.10 to 93.184.216.119
 
 
 
