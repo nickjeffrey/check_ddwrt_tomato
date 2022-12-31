@@ -32,7 +32,7 @@ It is assumed you already have SSH public/private keys created for the nagios us
    ssh-keygen -t rsa
 ```
 # SSH key pair setup on DD-WRT routers
-- lick the "Services" tab
+- click the "Services" tab
 - click the "Services" sub-tab
 - scroll down to the "Secure Shell" section
 - paste the contents of $HOME/.ssh/id_dsa.pub into the "Authorized Keys" section
