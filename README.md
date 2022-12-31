@@ -3,8 +3,8 @@ nagios check for routers running DD-WRT or Tomato firmware
 
 This is a nagios script that will SSH into a router # running DD-WRT or Tomato firmware and perform the following checks: 
 - name resolution exists for router
-- remote HTTP management is disabled
-- remote SSH  management is enabled
+- remote (via WAN port) HTTP management is disabled
+- remote (via WAN port) SSH  management is enabled
 - cron daemon is enabled 
 - a daily reboot is scheduled between midnight-8am
 - telnet daemon is disabled
