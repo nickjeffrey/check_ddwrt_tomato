@@ -29,26 +29,30 @@
 # -----------------
 #  validate that the remote syslog host is actually receiving syslog entries
 #  validate that the remote NTP host is actually providing valid time updates
-#  consider replacing perl modules with /usr/bin/ssh to eliminate dependency
+#  replace calls to /usr/bin/ssh with $ssh variable
+#  get rid of $out variables, $param, Net::SSH::Perl
 
 
 
 
 # CHANGE LOG
 # ----------
-#  2010/06/23	njeffrey	   Script created to check DD-WRT routers
-#  2011/06/16	njeffrey	   Enhancements and bug fixes
-#  2013/03/14	njeffrey	   Change ssh login timeout from 5 seconds to 30 seconds
-#  2013/03/15	njeffrey	   Add capabilities to check routers running Tomato firmware
-#  2013/03/15	njeffrey	   Add checks for SNMP daemon
-#  2013/03/20	njeffrey	   Add checks for scheduled daily reboot between midnight-8am
-#  2013/03/20	njeffrey	   Add checks for NTP time synchronization
-#  2013/03/20	njeffrey	   Confirm Internet access by checking ping reply from WAN gateway
-#  2013/03/21	njeffrey	   Formatting cleanup
-#  2013/06/17	njeffrey	   Bug fix for Tomato remote web access
-#  2013/06/17	njeffrey	   Only check for DNS servers on router if DHCP server is enabled
-#  2013/06/17	njeffrey	   Bug fix for Tomato WAN DNS servers
-#  2013/07/29 njeffrey    Change IP address of example.com from 192.0.43.10 to 93.184.216.119
+#  2010/06/23	Nick Jeffrey	Script created to check DD-WRT routers
+#  2011/06/16	Nick Jeffrey	Enhancements and bug fixes
+#  2013/03/14	Nick Jeffrey	Change ssh login timeout from 5 seconds to 30 seconds
+#  2013/03/15	Nick Jeffrey	Add capabilities to check routers running Tomato firmware
+#  2013/03/15	Nick Jeffrey	Add checks for SNMP daemon
+#  2013/03/20	Nick Jeffrey	Add checks for scheduled daily reboot between midnight-8am
+#  2013/03/20	Nick Jeffrey	Add checks for NTP time synchronization
+#  2013/03/20	Nick Jeffrey	Confirm Internet access by checking ping reply from WAN gateway
+#  2013/03/21	Nick Jeffrey	Formatting cleanup
+#  2013/06/17	Nick Jeffrey	Bug fix for Tomato remote web access
+#  2013/06/17	Nick Jeffrey	Only check for DNS servers on router if DHCP server is enabled
+#  2013/06/17	Nick Jeffrey	Bug fix for Tomato WAN DNS servers
+#  2013/07/29	Nick Jeffrey	Change DNS check from example.com to iana.org (example.com getting multiple IP addresses due to anycast)
+#  2013/07/29	Nick Jeffrey	Enhance DNS check for iana.org
+#  2013/08/19	Nick Jeffrey	Add performance data
+
 
 
 
@@ -186,60 +190,61 @@
 
 
 use strict;							#enforce good coding practices
-use Net::SSH::Perl;						#use external perl module
+#use Net::SSH::Perl;						#use external perl module
 
 
 
 #declare variables
-my ($host,$ssh,$ssh_userid,%params);
+my ($host,$ssh,$ssh_userid,%params,%nvram);
 my ($verbose);
 my ($cpu_load,$cpu_load_1min,$cpu_load_5min,$cpu_load_15min);
 my ($mem_total,$mem_used,$mem_free);
 my ($nslookup,$nslookup_status,$cmd);
 my ($OK,$WARN,$CRITICAL,$UNKNOWN,$CHECK_NAME);
-my ($out,$err,$exit);
-my ($cron_status,$telnet_status,$ssh_status,$snmp_status,$reboot_status);
+my ($crond_status,$telnetd_status,$sshd_status,$snmpd_status,$reboot_status);
 my ($wireless_clients,$wireless_encryption);
 my ($sshd_port,$sshd_wanport,$syslogd_status,$syslogd_rem_ip,$ntp_rem_ip);
 my ($wan_ipaddr,$wan_gateway,$wan_dns1,$wan_dns2,$lan_proto);
+my ($iana_org_expected,$iana_org_received);
+my ($perf_data,$issue_count);
 
-$host                = "";					#initialize variable
-$ssh                 = "";					#initialize variable
-$params{user}        = "root";					#userid to login to router as
-$params{port}        = 22;					#port that ssh daemon on router listens on (can be changed via CLI parameter)
-$params{protocol}    = 2;					#SSH protocol versions to use when connecting
-$params{timeout}     = 30;					#seconds to timeout a connection
-$nslookup            = "/usr/bin/nslookup";			#location of binary on nagios server
-$nslookup_status     = "";					#flag for checking to see if nslookup test succeeds
-$verbose             = "no";					#for debugging (yes=show more print output) 
-$out                 = "";					#placeholder for STDOUT
-$err                 = "";					#placeholder for STDERR
-$exit                = "";					#placeholder for exit status of ssh commands
-$ENV{'HOME'}         = '/home/nagios';				#set shell env variable to nagios user home dir
-$CHECK_NAME          = "DD-WRT/Tomato checks"; 			#name of nagios check
-$cpu_load            = ""; 					#placeholder for CPU load
-$cpu_load_1min       = ""; 					#placeholder for CPU load
-$cpu_load_5min       = ""; 					#placeholder for CPU load
-$cpu_load_15min      = ""; 					#placeholder for CPU load
-$mem_total           = "";					#total memory on router
-$mem_used            = "";					#used memory on router
-$mem_free            = "";					#free memory on router
-$cron_status         = "";					#status of cron   daemon
-$telnet_status       = "";					#status of telnet daemon
-$ssh_status          = "";					#status of ssh    daemon
-$snmp_status         = "";					#status of snmp   daemon
-$reboot_status       = "";					#status of scheduled reboot setting
-$wireless_clients    = "";					#number of connected wireless clients
-$wireless_encryption = "";					#type of wireless encryption in use
-$sshd_port           = "unknown";				#port that sshd (LAN-side) is listening on
-$sshd_wanport        = "unknown";				#port that sshd (Internet-side) is listening on
-$syslogd_status      = "unknown";    				#is syslog daemon enabled (0=no 1=yes)
-$syslogd_rem_ip      = "unknown"; 				#IP address of remote logging host
-$ntp_rem_ip          = "unknown"; 				#IP address of remote time server
-$wan_ipaddr          = ""; 					#IP address of WAN-side ethernet interface
-$wan_dns1            = "";					#primary DNS server for WAN interface (may be blank if router is not a DHCP server)
-$wan_dns2            = "";					#primary DNS server for WAN interface (may be blank if router is not a DHCP server)
-$wan_gateway         = ""; 					#IP address of WAN-side default gateway (ie next upstream hop)
+$host                 = "";					#initialize variable
+$ssh                  = "";					#initialize variable
+$params{user}         = "root";					#userid to login to router as
+$params{port}         = 22;					#port that ssh daemon on router listens on (can be changed via CLI parameter)
+$params{protocol}     = 2;					#SSH protocol versions to use when connecting
+$params{timeout}      = 30;					#seconds to timeout a connection
+$nslookup             = "/usr/bin/nslookup";			#location of binary on nagios server
+$nslookup_status      = "";					#flag for checking to see if nslookup test succeeds
+$verbose              = "no";					#for debugging (yes=show more print output) 
+$ENV{'HOME'}          = '/home/nagios';				#set shell env variable to nagios user home dir
+$CHECK_NAME           = "DD-WRT/Tomato checks"; 		#name of nagios check
+$cpu_load             = 0; 					#placeholder for CPU load
+$cpu_load_1min        = 0; 					#placeholder for CPU load
+$cpu_load_5min        = 0; 					#placeholder for CPU load
+$cpu_load_15min       = 0; 					#placeholder for CPU load
+$mem_total            = 0;					#total memory on router
+$mem_used             = 0;					#used memory on router
+$mem_free             = 0;					#free memory on router
+$crond_status         = "";					#status of cron   daemon
+$telnetd_status       = "";					#status of telnet daemon
+$sshd_status          = "";					#status of ssh    daemon
+$snmpd_status         = "";					#status of snmp   daemon
+$reboot_status        = "";					#status of scheduled reboot setting
+$wireless_clients     = "";					#number of connected wireless clients
+$wireless_encryption  = "";					#type of wireless encryption in use
+$sshd_port            = "unknown";				#port that sshd (LAN-side) is listening on
+$sshd_wanport         = "unknown";				#port that sshd (Internet-side) is listening on
+$syslogd_status       = "unknown";    				#is syslog daemon enabled (0=no 1=yes)
+$syslogd_rem_ip       = "unknown"; 				#IP address of remote logging host
+$ntp_rem_ip           = "unknown"; 				#IP address of remote time server
+$wan_ipaddr           = ""; 					#IP address of WAN-side ethernet interface
+$wan_dns1             = "";					#primary DNS server for WAN interface (may be blank if router is not a DHCP server)
+$wan_dns2             = "";					#primary DNS server for WAN interface (may be blank if router is not a DHCP server)
+$wan_gateway          = ""; 					#IP address of WAN-side default gateway (ie next upstream hop)
+$iana_org_expected    = "192.0.43.8";				#IP address of iana.org (we use this known IP address to validate name resolution)
+$iana_org_received    = "";					#IP address received from nslookup query
+$issue_count          = 0;					#counter variable for number of problematic issues detected
 
  
 #
@@ -342,589 +347,19 @@ sub ssh_to_router {
    # ssh into remote host 
    #
    print "running ssh_to_router subroutine \n" if ($verbose eq "yes");
-   $ssh = Net::SSH::Perl->new($host,%params);
-   $ssh->login;
+   print "ssh -p $params{port} $params{user}\@$host \n" if ($verbose eq "yes");
+#   $ssh = Net::SSH::Perl->new($host,%params);
+#   $ssh->login;
+   $cmd = "nvram show";
+   open(IN,"/usr/bin/ssh -q -p $params{port} $params{user}\@$host $cmd |");
+   while (<IN>) {
+      if ( /([a-zA-Z0-9,_\-\.\(\)]+)=([a-zA-Z0-9:,_\-\.\\\/ ]+)/ ) {
+         print $_ if ($verbose eq "yes");
+         $nvram{$1} = $2;				#put key/value pair from command output into hash
+      }							#end of if block
+   }							#end of while loop
+   close IN;						#close filehandle
 }							#end of subroutine
-
-
-
-
-
-
-sub check_remote_management_via_http {
-   #
-   # Check settings on the router to make sure there are no glaring security problems.
-   # We break the checks for HTTP and SSH into 2 separate subroutines, just to make it
-   # easier for someone to comment out a single subroutine if they do want to change
-   # the settings for either HTTP or SSH for their particular network.
-   # 
-   # HINT: If you want to skip this check, comment out the appropriate subroutine at the bottom of the script
-   #
-   # For security reasons, we do not want the web management interface of the router 
-   # to be exposed to the Internet.  
-   # However, we do expose the SSH daemon to the Internet, just because the sysadmin 
-   # sometimes uses SSH tunneling for a quick-and-dirty SOCKS proxy, or a poor-man' VPN for remote access.
-   #
-   #
-   print "running check_remote_management_via_http subroutine \n" if ($verbose eq "yes");
-   #
-   return if ( $host =~ /router4/ ); 	#skip this router - the WAN connection is inside the corporate LAN - used for guest wifi
-   #
-   # These are the NVRAM settings on a DD-WRT router:
-   #     nvram show | grep remote
-   #       remote_management=0		(HTTP management 0=disabled 1=enabled)
-   #       remote_mgt_ssh=1		(SSH  management 0=disabled 1=enabled)
-   #
-   # These are the NVRAM settings on a Tomato router:
-   #     nvram show | grep remote
-   #       remote_management=0		(0=disabled 1=enabled)
-   #       sshd_remote=1		(SSH  management 0=disabled 1=enabled)
-   #
-   # check to see if the web management interface is exposed to the Internet (it should NOT be)
-   $cmd = "nvram show";				#define command to be run
-   print "running $cmd \n" if ($verbose eq "yes");
-   ($out, $err, $exit) = $ssh->cmd($cmd);
-   #
-   # If there was nothing on STDOUT in the above command, put a dummy value
-   # into the $out variable to ensure we don't get an error message when 
-   # we try to use an undefined variable.
-   $out = "blah blah blah" unless $out;
-   #
-   # alert if remote web-based management is enabled on a DD-WRT router
-   if ($out =~ /remote_mgt_ssh/ ) {				#confirm we are dealing with a DD-WRT router
-      if ($out =~ /remote_management=1/ ) {	
-         print "$CHECK_NAME WARN - the web management interface is exposed to the Internet.  This is a security risk.  If you need to manage this router remotely, you should use an SSH tunnel instead. Please click Administration, Management, Remote Access, Web GUI Management, Disable, Apply. \n";
-         exit $WARN;
-      }								#end of if block
-   }								#end of if block
-   #
-   # alert if remote web-based management is enabled on a Tomato router
-   if ($out =~ /sshd_remote/ ) {				#confirm we are dealing with a Tomato router
-      if ($out =~ /remote_management=1/ ) {	
-         print "$CHECK_NAME WARN - the web management interface is exposed to the Internet.  This is a security risk.  If you need to manage this router remotely, you should use an SSH tunnel instead. Please click Administration, Web Admin, Remote Access, Disabled, Save. \n";
-         exit $WARN;
-      }								#end of if block
-   }								#end of if block
-}								#end of subroutine
-
-
-
-
-
-
-sub check_remote_management_via_ssh {
-   #
-   # Check settings on the router to make sure there are no glaring security problems.
-   # We break the checks for HTTP and SSH into 2 separate subroutines, just to make it
-   # easier for someone to comment out a single subroutine if they do want to change
-   # the settings for either HTTP or SSH for their particular network.
-   #
-   # HINT: If you want to skip this check, comment out the appropriate subroutine at the bottom of the script
-   #
-   # For security reasons, we do not want the web management interface of the router 
-   # to be exposed to the Internet.  
-   # However, we do expose the SSH daemon to the Internet, just because the sysadmin 
-   # sometimes uses SSH tunneling for a quick-and-dirty SOCKS proxy, or a poor-man' VPN for remote access.
-   #
-   #
-   print "running check_remote_management_via_ssh subroutine \n" if ($verbose eq "yes");
-   #
-   # These are the NVRAM settings on a DD-WRT router:
-   #     nvram show | grep remote
-   #       remote_management=0		(HTTP management 0=disabled 1=enabled)
-   #       remote_mgt_ssh=1		(SSH  management 0=disabled 1=enabled)
-   #
-   # These are the NVRAM settings on a Tomato router:
-   #     nvram show | grep remote
-   #       remote_management=0		(0=disabled 1=enabled)
-   #       sshd_remote=1		(SSH  management 0=disabled 1=enabled)
-   #
-   # check to see if the web management interface is exposed to the Internet (it should NOT be)
-   $cmd = "nvram show";				#define command to be run
-   print "running $cmd \n" if ($verbose eq "yes");
-   ($out, $err, $exit) = $ssh->cmd($cmd);
-   #
-   # If there was nothing on STDOUT in the above command, put a dummy value
-   # into the $out variable to ensure we don't get an error message when 
-   # we try to use an undefined variable.
-   $out = "blah blah blah" unless $out;
-   #
-   #
-   # check to see if the SSH daemon is exposed to the Internet (it should be)
-   # Yes, I realize that it's a bit silly to SSH into a router to see if the SSH daemon is enabled.
-   # However, it is possible that this script connects to the LAN-side of the router, so we want to be 
-   # warned in that event if the SSH daemon is not exposed to the Internet.
-   #
-   # This is the format used on a DD-WRT router
-   # alert if ssh daemon is NOT accessible to the Internet (ie we want remote access via ssh)
-   if ($out =~ /remote_mgt_ssh=0/ ) {				      # generate an alert and exit the script
-      print "$CHECK_NAME WARN - SSH remote management is not enabled.  This means you cannot get into this router for remote management.  If you need to manage this router remotely, you should enable this feature. Please click Administration, Management, Remote Access, SSH Management, Enable, Apply. \n";
-      exit $WARN;
-   }								#end of if block
-   # This is the format used on a Tomato router
-   # alert if ssh daemon is NOT accessible to the Internet (ie we want remote access via ssh)
-   if ($out =~ /sshd_remote=0/ ) {				      # generate an alert and exit the script
-      print "$CHECK_NAME WARN - SSH remote management is not enabled.  This means you cannot get into this router for remote management.  If you need to manage this router remotely, you should enable this feature. Please click Administration, Admin Access, SSH Enable at startup, Remote Access, Save. \n";
-      exit $WARN;
-   }								#end of if block
-}								#end of subroutine
-
-
-
-
-
-sub check_cron_daemon {
-   #
-   # confirm cron daemon is running
-   # We only need to check this on DD-WRT routers, as cron is always running on Tomato routers.
-   #
-   print "running check_cron_daemon subroutine \n" if ($verbose eq "yes");
-   #
-   # Confirm that cron daemon is enabled (required for scheduled reboots)
-   $cmd = "nvram show";				#define command to be run
-   print "running $cmd \n" if ($verbose eq "yes");
-   ($out, $err, $exit) = $ssh->cmd($cmd);
-   #
-   # If there was nothing on STDOUT in the above command, put a dummy value
-   # into the $out variable to ensure we don't get an error message when 
-   # we try to use an undefined variable.
-   $out = "blah blah blah" unless $out;
-   #
-   $cron_status = "enabled" if ( $out =~ /cron_enable=1/ );		#this is the NVRAM setting on DD-WRT routers
-   $cron_status = "enabled" if ( $out =~ /sch_rboot=1/ );		#this is the NVRAM setting on Tomato routers
-   #
-   # alert if cron daemon is disabled (only applicable to DD-WRT.  Tomato routers always have cron enabled)
-   if ($out =~ /cron_enable=0/ ) {	
-      # generate an alert and exit the script
-      print "$CHECK_NAME WARN - cron daemon is not enabled.  We need cron running in order to schedule automated reboots. Please click Administration, Management, Cron, Enable, Apply. \n";
-      exit $WARN;
-   }									#end of if block
-}									#end of subroutine
-
-
-
-
-
-
-
-sub check_for_scheduled_reboot {
-   #
-   # These routers running the DD-WRT or Tomato firmware are generally consumer-grade routers.
-   # They tend to work better if they get restarted once in a while.
-   # This section confirms there is a daily reboot of the router.
-   #
-   # These are the NVRAM settings on a DD-WRT router:
-   #     nvram show | grep schedule
-   #       schedule_enable=1		(0=disabled 1=enabled)
-   #       schedule_hour=1		(1=reboot every X seconds, 2=reboot at same time each day)
-   #       schedule_time=3600		(reboot every 3600 seconds)
-   #       schedule_hours=23		(reboot at 23:59)   (does not use leading 0 for hours   less than 10)
-   #       schedule_minutes=59		(reboot at 23:59)   (does not use leading 0 for minutes less than 10)
-   #       schedule_weekdays=*		(*=everyday, 00=Sunday, 01=Monday, etc)
-   #
-   #
-   # These are the NVRAM settings on a Tomato router:
-   # You will notice that several of the entries have #,#,#
-   # The first number is 0=disabled 1=enabled, and usually turns the feature on or off
-   # The second number is the time of day calculated in number of minutes since midnight.  (0=midnight, 60=1am, 120=2am)
-   # The third number is the day(s) of the week (1=Sun, 2=Mon, 4=Tue, 8=Wed, 16=Thu, 32=Fri, 64=Sat)  
-   # You can add values together for multiple days of the week (Sun+Mon=1+2, Everyday=1+2+4+8+16+32+64)
-   #     nvram show | grep sch_
-   #       sch_rboot=1,210,127         (Scheduled reboot   0=disabled,1=enabled)
-   #       sch_rcon=0,0,127            (Scheduled reconnect - release/renew WAN IP 0=disabled,1=enabled)
-   #       sch_c1=0,-30,127            (Custom schedule 1  0=disabled,1=enabled)
-   #       sch_c1_cmd=                 (command to be run for Custom schedule 1)
-   #       sch_c2=0,-30,127            (Custom schedule 2  0=disabled,1=enabled)
-   #       sch_c2_cmd=                 (command to be run for Custom schedule 2)
-   #       sch_c3=0,-30,127            (Custom schedule 3  0=disabled,1=enabled)
-   #       sch_c3_cmd=                 (command to be run for Custom schedule 3)
-   #       sch_c4=0,-30,127            (Custom schedule 4  0=disabled,1=enabled)
-   #       sch_c4_cmd=                 (command to be run for Custom schedule 4)
-   #       sch_c5=0,-30,127            (Custom schedule 5  0=disabled,1=enabled)
-   #       sch_c5_cmd=                 (command to be run for Custom schedule 5)
-   #
-   #
-   print "running check_for_scheduled_reboot subroutine \n" if ($verbose eq "yes");
-   #
-   #
-   #
-   # This command will generate multiple lines of ouput.
-   $cmd = "nvram show | grep ^sch";				#define command to be run
-   print "running $cmd \n" if ($verbose eq "yes");
-   ($out, $err, $exit) = $ssh->cmd($cmd);
-   #
-   ## vestigial code removed from script - left here because it was interesting
-   ## We now have a multiline scalar variable $out
-   ## This is a nifty alternative to splitting the scalar into an array and using a while (<@array>) loop
-   #for (split /\n/, $out) {
-   #   # this section is for DD-WRT routers
-   #   $schedule_enable     = $1 if ( /schedule_enable=([0-1])/        ); #1=enable 0=disable
-   #   $schedule_weekdays   = $1 if ( /schedule_weekdays=(\*)/         ); # *=everyday
-   #   $schedule_weekdays   = $1 if ( /schedule_weekdays=([0-9][0-9])/ ); # 00=Sunday, 01=Monday, etc
-   #   $schedule_hours      = $1 if ( /schedule_hours=([0-9]+)/        ); #no leading zero for hours   <10
-   #   $schedule_minutes    = $1 if ( /schedule_minutes=([0-9]+)/      ); #no leading zero for minutes < 10
-   #   $schedule_hour_time  = $1 if ( /schedule_hour_time=([1-2])/     ); #1=reboot every X seconds, 2=reboot at set time
-   #   $schedule_time       = $1 if ( /schedule_time=([0-9]+)/         ); #number of seconds between reboots
-   #}							  		 #end of for loop
-   #
-   # If there was nothing on STDOUT in the above command, put a dummy value
-   # into the $out variable to ensure we don't get an error message when 
-   # we try to use an undefined variable.
-   $out = "blah blah blah" unless $out;
-   #
-   #
-   $reboot_status = "enabled" if ( $out =~ /schedule_enable=1/ );		#NVRAM setting on DD-WRT routers	
-   $reboot_status = "enabled" if ( $out =~ /sch_rboot=1/ );			#NVRAM setting on Tomato routers
-   #
-   # alert if scheduled reboots are disabled on DD-WRT router
-   if ( $out =~ /schedule_enable=0/ ) {	
-      print "$CHECK_NAME WARN - scheduled reboots are disabled.  Consumer-grade routers often lock up, so scheduling automatic reboots tends to make the router more reliable. Please click Administration, Keep Alive, Schedule Reboot, Enable, At a Set Time, 05:00 Everyday, Apply. \n";
-      exit $WARN;
-   }
-   # alert if scheduled reboots are disabled on Tomato router
-   if ( $out =~ /sch_rboot=0/ ) {	
-      print "$CHECK_NAME WARN - scheduled reboots are disabled.  Consumer-grade routers often lock up, so scheduling automatic reboots tends to make the router more reliable. Please click Administration, Scheduler, Reboot, Enabled, 05:00 Everyday, Save. \n";
-      exit $WARN;
-   }
-   #								#end of if block
-   # alert if DD-WRT router does not reboot every single day
-   if ( $out =~ /schedule_weekdays/ ) {				#confirm we are dealing with a DD-WRT router
-      unless ( $out =~ /schedule_weekdays=\*/ ) {		# * means reboot every day, 00=Sunday, 01=Monday, etc
-         print "$CHECK_NAME WARN - scheduled reboots are disabled.  Consumer-grade routers often lock up, so scheduling automatic reboots tends to make the router more reliable. Please click Administration, Scheduler, Reboot, Enabled, 05:00 Everyday, Save. \n";
-         exit $WARN;
-      }								#end of unless block
-   }								#end of if block
-   #	
-   # alert if Tomato router does not reboot every single day
-   if ( $out =~ /sch_rboot/ ) {					#confirm we are dealing with a Tomato router
-      unless ( $out =~ /sch_rboot=1,[0-9]+,127/ ) {		#127 in third field means reboot every day.  Look a little higher up in this script for details.
-         print "$CHECK_NAME WARN - This router is not scheduled to reboot every day of the week.  Consumer-grade routers often lock up, so scheduling automatic reboots tends to make the router more reliable. Please click Administration, Scheduler, Reboot, Enabled, 05:00 Everyday, Save. \n";
-         exit $WARN;
-      }								#end of unless block
-   }								#end of if block
-   #
-   # alert if the DD-WRT router is scheduled to automatically reboot every X seconds instead of at the same time every day
-   # It would be bad to have the router reboot every X seconds, because it would go down at inopportune times.
-   if ( $out =~ /schedule_hour=1/ ) {				#1=reboot every X seconds, 2=reboot at set time
-      print "$CHECK_NAME WARN - the router is not scheduled to automatically reboot at the same time every day.  The scheduled reboot should be a specific time between midnight-8am, rather than a set number of seconds after the last reboot.  Please click Administration, Keep Alive, Schedule Reboot, Enable, At a Set Time, 05:00 Everyday, Apply. \n";
-      exit $WARN;
-   }								#end of if block
-   #
-   #
-   # We don't really care the exact time the router reboots every day, so long as it is not between 8am and midnight.
-   # Send an alert if the router is scheduled to reboot anytime between 8am and midnight.
-   #
-   # This section is for DD-WRT routers
-   # Note that there are no leading zeros before the hours or minutes
-   if ( $out =~ /schedule_hours=([0-9]+)/ ) {			#confirm we are dealing with a DD-WRT router
-      if ( $1 >= 8 ) {						#hour to reboot in 24-hour time.  We want to reboot between midnight and 8am.
-         print "$CHECK_NAME WARN - the router is scheduled to reboot after 8am.  To avoid interrupting users, please schedule the reboot sometime between midnight at 8am.  Please click Administration, Keep Alive, Schedule Reboot, Enable, At a Set Time, 05:00 Everyday, Apply. \n";
-         exit $WARN;
-      }								#end of if block
-   }								#end of if block
-   # This section is for Tomato routers
-   if ( $out =~ /sch_rboot=1,([0-9]+),[0-9]+/ ) {		#confirm we are dealing with a Tomato router
-      if ( $1 > 480 ) {						#the 2nd field is the number of minutes since midnight.  So, 8am=8*60=480
-         print "$CHECK_NAME WARN - the router is scheduled to reboot after 8am. To avoid interrupting users, please schedule the reboot sometime between midnight at 8am.  Please click Administration, Scheduler, Reboot enable, At a Set Time, 05:00 Everyday, Save. \n";
-         exit $WARN;
-      }								#end of if block
-   }								#end of if block
-}								#end of subroutine
-
-
-
-
-
-
-
-
-sub check_telnet_daemon {
-   #
-   # Confirm telnet daemon is NOT running.  Best practice dictates using SSH instead of telnet.
-   #
-   print "running check_telnet_daemon subroutine \n" if ($verbose eq "yes");
-   #
-   $cmd = "nvram show";				#define command to be run
-   print "running $cmd \n" if ($verbose eq "yes");
-   ($out, $err, $exit) = $ssh->cmd($cmd);
-   #
-   # If there was nothing on STDOUT in the above command, put a dummy value
-   # into the $out variable to ensure we don't get an error message when 
-   # we try to use an undefined variable.
-   $out = "blah blah blah" unless $out;
-   #
-   #
-   $telnet_status = "disabled" if ( $out =~ /telnetd_enable=0/ );	#this is the NVRAM setting on DD-WRT routers
-   $telnet_status = "disabled" if ( $out =~ /telnetd_eas=0/ );		#this is the NVRAM setting on Tomato routers (eas=Enabled At Startup)
-   #
-   # alert if telnet daemon is enabled (on DD-WRT routers)
-   if ($out =~ /telnetd_enable=1/ ) {	
-      print "$CHECK_NAME WARN - telnet daemon is enabled.  You should disable the telnet daemon and use SSH instead. Please click Services, Services, Telnet, Disable, Apply. \n";
-      exit $WARN;
-   }									#end of if block
-   # alert if telnet daemon is enabled (on Tomato routers)	
-   if ($out =~ /telnetd_eas=1/ ) {	
-      print "$CHECK_NAME WARN - telnet daemon is enabled.  You should disable the telnet daemon and use SSH instead. Please click Administration, Admin Access, Telnet Daemon, uncheck checkbox, Save. \n";
-      exit $WARN;
-   }									#end of if block
-}									#end of subroutine
-
-
-
-
-
-
-
-sub check_ssh_daemon {
-   #
-   # Check to see which port the SSH daemon is listening on.
-   #
-   print "running check_ssh_daemon subroutine \n" if ($verbose eq "yes");
-   #
-   # These are the NVRAM settings on DD-WRT routers:
-   #   nvram show | grep ^sshd_
-   #    
-   $cmd = "nvram show | grep ^sshd_";				#define command to be run
-   print "running $cmd \n" if ($verbose eq "yes");
-   ($out, $err, $exit) = $ssh->cmd($cmd);
-   #
-   # If there was nothing on STDOUT in the above command, put a dummy value
-   # into the $out variable to ensure we don't get an error message when 
-   # we try to use an undefined variable.
-   $out = "blah blah blah" unless $out;
-   #
-   #
-   $ssh_status = "enabled" if ( $out =~ /sshd_enable=1/ );	#this is the NVRAM setting on DD-WRT routers
-   $ssh_status = "enabled" if ( $out =~ /sshd_eas=1/ );	#this is the NVRAM setting on Tomato routers (eas=Enabled At Startup)
-   #
-   #
-   # alert if ssh daemon is disabled (on DD-WRT routers)
-   if ($out =~ /telnetd_enable=0/ ) {	
-      print "$CHECK_NAME WARN - SSH daemon is disabled.  You should enable the SSH daemon for remote administration. Please click Services, Services, SSH, Enable, Apply. \n";
-      exit $WARN;
-   }									#end of if block
-   # alert if ssh daemon is disabled (on Tomato routers)	
-   if ($out =~ /sshd_eas=0/ ) {	
-      print "$CHECK_NAME WARN - SSH daemon is disabled.  You should enable the SSH daemon for remote administration. Please click Administration, Admin Access, SSH Daemon, enable checkbox, Save. \n";
-      exit $WARN;
-   }									#end of if block
-   # These are the NVRAM settings on DD-WRT routers
-   $sshd_port    = "22" if ( $out =~ /sshd_port=$/ );		#may be blank if left at default of port 22
-   $sshd_port    = "$1" if ( $out =~ /sshd_port=([0-9]+)/ );	#capture the number the sshd_port is listening on
-   $sshd_wanport = "22" if ( $out =~ /sshd_wanport=$/ );	#may be blank if left at default of port 22
-   $sshd_wanport = "$1" if ( $out =~ /sshd_wanport=([0-9]+)/ );	#capture the number the sshd_port is listening on
-   #
-   # These are the NVRAM settings on Tomato routers
-   $sshd_port    = "22" if ( $out =~ /sshd_port=$/ );		#may be blank if left at default of port 22
-   $sshd_port    = "$1" if ( $out =~ /sshd_port=([0-9]+)/ );	#capture the number the sshd_port is listening on
-   $sshd_wanport = "22" if ( $out =~ /sshd_rport=$/ );		#may be blank if left at default of port 22
-   $sshd_wanport = "$1" if ( $out =~ /sshd_rport=([0-9]+)/ );	#capture the number the sshd_port is listening on
-}								#end of subroutine
-
-
-
-
-
-
-
-sub check_syslog_daemon {
-   #
-   # Confirm syslog daemon is running and logging to a remote host
-   #
-   print "running check_syslog_daemon subroutine \n" if ($verbose eq "yes");
-   #
-    # These are the NVRAM settings on a DD-WRT router:
-   #   nvram show | grep ^syslogd
-   #     syslogd_enable=1		 (0=disabled, 1=enabled)
-   #     syslogd_rem_ip=192.168.1.20     (IP address of syslog host)
-   #
-   #
-   # These are the NVRAM settings on a Tomato router:
-   #   nvram show | grep ^log_remote
-   #     log_remote=0                   (0=disabled, 1=enabled)
-   #     log_remoteip=192.168.1.20      (IP address of syslog host)
-   #     log_remoteport=514             (UDP port used for syslog)
-   #
-   $cmd = "nvram show";				#define command to be run
-   print "running $cmd \n" if ($verbose eq "yes");
-   ($out, $err, $exit) = $ssh->cmd($cmd);
-   #
-   # If there was nothing on STDOUT in the above command, put a dummy value
-   # into the $out variable to ensure we don't get an error message when 
-   # we try to use an undefined variable.
-   $out = "blah blah blah" unless $out;
-   #
-   #
-   # Populate variables for later use in the printed output message
-   $syslogd_status = "enabled" if ( $out =~ /syslogd_enable=1/ );	    #setting on DD-WRT routers
-   $syslogd_status = "enabled" if ( $out =~ /log_remote=1/ );		    #setting on Tomato routers
-   $syslogd_rem_ip = $1        if ( $out =~ /syslogd_rem_ip=([0-9\.]+)/ );  #setting on DD-WRT routers
-   $syslogd_rem_ip = $1        if ( $out =~ /log_remoteip=([0-9\.]+)/ );    #setting on Tomato routers
-   #
-   # Alert if syslog is disabled on DD-WRT router
-   if ( $out =~ /syslogd_enable=0/ ) {
-      print "$CHECK_NAME WARN - The syslog daemon is disabled.  You should be logging to a remote host. Please click Services, Syslogd: enable, Remote logging host, Save, Apply. \n";
-      exit $WARN;
-   }								#end of if block
-   #
-   # Alert if syslog is disabled on Tomato router
-   if ( $out =~ /log_remote=0/ ) {
-      print "$CHECK_NAME WARN - The syslog daemon is disabled.  You should be logging to a remote host. Please click Administration, Logging, Log to remote system:IPaddr, Save. \n";
-      exit $WARN;
-   }								#end of if block
-   #
-   # Alert if syslog is enabled but there is no remote logging host on DD-WRT router
-   if ( $out =~ /syslogd_enable=1/ ) {			#confirm we are dealing with a DD-WRT router
-      if ( $syslogd_rem_ip eq "unknown" ) {
-         print "$CHECK_NAME WARN - The syslog daemon is enabled, but there is no remote logging host.  You should be logging to a remote host.  Please click Services, Syslogd: enable, Remote logging host, Save, Apply. \n";
-         exit $WARN;
-      }								#end of if block
-   }								#end of if block
-   #
-   # Alert if syslog is enabled but there is no remote logging host on Tomato router
-   if ( $out =~ /log_remote=1/ ) {			#confirm we are dealing with a DD-WRT router
-      if ( $syslogd_rem_ip eq "unknown" ) {
-         print "$CHECK_NAME WARN - The syslog daemon is enabled, but there is no remote logging host.  You should be logging to a remote host.  Please click Administration, Logging, Log to remote host, IP address of syslog server, Select the events you wish to log, Save. \n";
-         exit $WARN;
-      }								#end of if block
-   }								#end of if block
-}								#end of subroutine
-
-
-
-
-
-
-
-
-sub check_ntp_daemon {
-   #
-   # Confirm router is synchronizing time against a Network Time Protocol server
-   #
-   print "running check_ntp_daemon subroutine \n" if ($verbose eq "yes");
-   #
-   # These are the NVRAM settings on a DD-WRT router:
-   #     nvram show | grep ntp_
-   #        ntp_enable=1
-   #        ntp_server=0.ca.pool.ntp.org
-   #        ntp_mode=auto
-   #
-   # These are the NVRAM settings on a Tomato router:
-   #     nvram show | grep ntp_
-   #       ntp_kiss=
-   #       ntp_kiss_ignore=
-   #       ntp_server=0.north-america.pool.ntp.org 1.north-america.pool.ntp.org 2.north-america.pool.ntp.org
-   #       ntp_tdod=0
-   #       ntp_updates=24
-   #
-   $cmd = "nvram show | grep ^ntp_";				#define command to be run
-   print "running $cmd \n" if ($verbose eq "yes");
-   ($out, $err, $exit) = $ssh->cmd($cmd);
-   #
-   # If there was nothing on STDOUT in the above command, put a dummy value
-   # into the $out variable to ensure we don't get an error message when 
-   # we try to use an undefined variable.
-   $out = "blah blah blah" unless $out;
-   #
-   #
-   $ntp_rem_ip = "$1" if ( $out =~ /ntp_server=([a-zA-Z0-9\.\- ]+)/ );	#capture the remote NTP server on DD-WRT router (same as Tomato)
-   $ntp_rem_ip = "$1" if ( $out =~ /ntp_server=([a-zA-Z0-9\.\- ]+)/ );	#capture the remote NTP server on Tomato router (same as DD-WRT)
-   #
-   # alert if ntp is disabled on DD-WRT routers
-   if ( $out =~ /ntp_enable=0/ ) {	
-      print "$CHECK_NAME WARN - NTP daemon is not enabled.  You should have time sync configured because your router time will reset to 00:00 during reboots.  You want accurate time so the scheduled reboot happens when you expect it to.  Please click Setup, Time Settings, NTP Client: enable, set time zone and NTP server, Save, Apply. \n";
-      exit $WARN;
-   } 								#end of if block
-   #
-   # alert if ntp is disabled on Tomato routers
-   if ( $out =~ /ntp_updates=0/ ) {	
-      print "$CHECK_NAME WARN - NTP daemon is not enabled.  You should have time sync configured because your router time will reset to 00:00 during reboots.  You want accurate time so the scheduled reboot happens when you expect it to.  Please click Basic, Time, Auto Update Time, every 24 hours, Select time servers, Save. \n";
-      exit $WARN;
-   } 								#end of if block
-   #
-   # alert if there are no time servers defined on DD-WRT routers
-   if ( $out =~ /ntp_enable/ ) {				#confirm we are dealing with a DD-WRT router
-      if ( $ntp_rem_ip eq "unknown" ) {	
-         print "$CHECK_NAME WARN - There are no NTP servers defined.  You should have time sync configured because your router time will reset to 00:00 during reboots.  You want accurate time so the scheduled reboot happens when you expect it to.  Please click Setup, Time Settings, NTP Client: enable, set time zone and NTP server, Save, Apply. \n";
-         exit $WARN;
-      } 							#end of if block
-   } 								#end of if block
-   #
-   # alert if there are no time servers defined on Tomato routers
-   if ( $out =~ /ntp_updates/ ) {				#confirm we are dealing with a Tomato router
-      if ( $ntp_rem_ip eq "unknown" ) {	
-         print "$CHECK_NAME WARN - There are no NTP servers defined.  You should have time sync configured because your router time will reset to 00:00 during reboots.  You want accurate time so the scheduled reboot happens when you expect it to.  Please click Basic, Time, Auto Update Time, every 24 hours, Select time servers, Save. \n";
-         exit $WARN;
-      } 							#end of if block
-   } 								#end of if block
-}								#end of subroutine
-
-
-
-
-
-
-sub check_snmp_daemon {
-   #
-   # Confirm the SNMP daemon is running
-   #
-   #
-   print "running check_snmp_daemon subroutine \n" if ($verbose eq "yes");
-   #
-   # 
-   # This is the output on a DD-WRT router:
-   #    nvram show | grep snmp
-   #      snmp_syscontact=root
-   #      snmpd_enable=1
-   #      snmp_syslocation=Unknown
-   #      snmp_sysname=Unknown
-   #      snmp_port=161
-   #      snmpd_rocommunity=public
-   #      snmpd_rwcommunity=private
-   #      snmpd_conf=
-   #
-   # This is the output on a Tomato router:
-   #    nvram show | grep snmp
-   #      snmp_contact=
-   #      snmp_enable=1
-   #      snmp_location=core router
-   #      snmp_port=161
-   #      snmp_remote=1
-   #      snmp_remote_sip=192.168.0.0/24
-   #      snmp_ro=public
-   #
-   # Confirm that SNMP daemon is enabled
-   $cmd = "nvram show | grep ^snmp";			#define command to be run
-   print "running $cmd \n" if ($verbose eq "yes");
-   ($out, $err, $exit) = $ssh->cmd($cmd);
-   #
-   # If there was nothing on STDOUT in the above command, put a dummy value
-   # into the $out variable to ensure we don't get an error message when 
-   # we try to use an undefined variable.
-   $out = "blah blah blah" unless $out;
-   #
-   #
-   $snmp_status = "enabled" if ( $out =~ /snmpd_enable=1/ );	# 0=disabled 1=enabled on a DD-WRT router
-   $snmp_status = "enabled" if ( $out =~ /snmp_enable=1/ );	# 0=disabled 1=enabled on a Tomato router
-   #
-   # alert if SNMP daemon is disabled on a DD-WRT router
-   if ($out =~ /snmpd_enable=0/ ) {	
-      print "$CHECK_NAME WARN - SNMP daemon is not enabled.  We need SNMP running to gather traffic statistics on the ethernet interfaces. Please click Administration, Management, SNMP, Enable, Apply. \n";
-      exit $WARN;
-   }								#end of if block
-   # alert if SNMP daemon is disabled on a Tomato router
-   if ($out =~ /snmp_enable=0/ ) {	
-      print "$CHECK_NAME WARN - SNMP daemon is not enabled.  We need SNMP running to gather traffic statistics on the ethernet interfaces. Please click Administration, SNMP, Enable SNMP, Save. \n";
-      exit $WARN;
-   }								#end of if block
-}								#end of subroutine
-
-
-
-
-
-
-
 
 
 
@@ -952,27 +387,41 @@ sub check_cpu_load {
    print "running check_cpu_load subroutine \n" if ($verbose eq "yes");
    #
    # Confirm that cpu load is at a reasonable level
+   #
    $cmd = "cat /proc/loadavg";					#define command to be run
-   print "running $cmd \n" if ($verbose eq "yes");
-   ($out, $err, $exit) = $ssh->cmd($cmd);
+   open(IN,"/usr/bin/ssh -q -p $params{port} $params{user}\@$host $cmd |");
+   while (<IN>) {
+      #
+      # figure out load averages
+      if ( /^([0-9]\.[0-9][0-9]) ([0-9]\.[0-9][0-9]) ([0-9]\.[0-9][0-9])/ ) {
+         $cpu_load_1min  = $1;
+         $cpu_load_5min  = $2;
+         $cpu_load_15min = $3;
+      } 								#end of if block
+   }								#end of while loop
+   close IN;							#close filehandle
    #
-   # If there was nothing on STDOUT in the above command, put a dummy value
-   # into the $out variable to ensure we don't get an error message when 
-   # we try to use an undefined variable.
-   $out = "blah blah blah" unless $out;
-   #
-   #
-   # figure out load averages
-   if ( $out =~ /^([0-9]\.[0-9][0-9]) ([0-9]\.[0-9][0-9]) ([0-9]\.[0-9][0-9])/ ) {
-      $cpu_load_1min  = $1;
-      $cpu_load_5min  = $2;
-      $cpu_load_15min = $3;
-   } 								#end of if block
+   # Confirm valid information was received
+   if ( $cpu_load_1min eq "" ) {
+      print "$CHECK_NAME UNKNOWN - could not determine cpu load for past 1  minutes \n";
+      exit $UNKNOWN;
+   }								#end of if block
+   if ( $cpu_load_5min eq "" ) {
+      print "$CHECK_NAME UNKNOWN - could not determine cpu load for past 5  minutes \n";
+      exit $UNKNOWN;
+   }								#end of if block
+   if ( $cpu_load_15min eq "" ) {
+      print "$CHECK_NAME UNKNOWN - could not determine cpu load for past 15 minutes \n";
+      exit $UNKNOWN;
+   }								#end of if block
    #
    # multiply by 100 to get percentages
    $cpu_load_1min  = $cpu_load_1min  * 100;
    $cpu_load_5min  = $cpu_load_5min  * 100;
    $cpu_load_15min = $cpu_load_15min * 100;
+   print "   cpu load:  1_minute:$cpu_load_1min\%  5_minute:$cpu_load_5min\%  15_minute:$cpu_load_15min\% \n" if ($verbose eq "yes");
+   #
+   $perf_data = "cpu_load_15min=$cpu_load_15min;;;; memused=$mem_used;;;; wireless_clients=$wireless_clients;;; ";  #capture performance data
    #
    if ( $cpu_load_15min >= 90 ) {	
       # generate an alert and exit the script
@@ -1024,36 +473,39 @@ sub check_memory {
    #
    # Confirm that used memory is at a reasonable level
    $cmd = "cat /proc/meminfo";				#define command to be run
-   print "running $cmd \n" if ($verbose eq "yes");
-   ($out, $err, $exit) = $ssh->cmd($cmd);
-   #
-   # If there was nothing on STDOUT in the above command, put a dummy value
-   # into the $out variable to ensure we don't get an error message when 
-   # we try to use an undefined variable.
-   $out = "blah blah blah" unless $out;
-   #
-   #
-   # figure out memory in use
-   $mem_total  = $1 if ( $out =~ /MemTotal: +([0-9]+) kB/ );
-   $mem_free   = $1 if ( $out =~ /MemFree: +([0-9]+) kB/ );
-   $mem_used   = $mem_total - $mem_free;
+   print "   running $cmd \n" if ($verbose eq "yes");
+   open(IN,"/usr/bin/ssh -q -p $params{port} $params{user}\@$host $cmd |");
+   while (<IN>) {
+      #
+      # figure out memory in use
+      if (/MemTotal: +([0-9]+) kB/ ) {
+         $mem_total  = $1;
+         print "   total memory: $mem_total kB \n" if ($verbose eq "yes");
+      }								#end of if block
+      if (/MemFree: +([0-9]+) kB/ ) {
+         $mem_free   = $1;
+         print "   free memory: $mem_free kB \n" if ($verbose eq "yes");
+      }								#end of if block
+   }								#end of while loop
+   close IN;							#close filehandle
    #
    # convert bytes into %
+   $mem_used   = $mem_total - $mem_free;
    $mem_used  = $mem_used  / $mem_total * 100;
    #
    # truncate after the decimal point.  The nearest % is close enough
    $mem_used = sprintf("%.0f",$mem_used);			#truncate to 0 decimal places
+   print "   memory used: $mem_used\% \n" if ($verbose eq "yes");
    #
+   #
+   $perf_data = "cpu_load_15min=$cpu_load_15min;;;; memused=$mem_used;;;; wireless_clients=$wireless_clients;;; ";  #capture performance data
    #
    if ( $mem_used >= 97 ) {	
       # generate an alert and exit the script
-      print "$CHECK_NAME WARN - memory is $mem_used\% used \n";
+      print "$CHECK_NAME WARN - memory is $mem_used\% used | $perf_data \n";
       exit $WARN;
    }								#end of if block
 }								#end of subroutine
-
-
-
 
 
 
@@ -1066,46 +518,663 @@ sub check_wireless {
    #
    # Figure out the wireless encryption type
    $cmd = "/usr/sbin/wl wsec";	#define command to be run
-   print "running $cmd \n" if ($verbose eq "yes");
-   ($out, $err, $exit) = $ssh->cmd($cmd);
-   #
-   # If there was nothing on STDOUT in the above command, put a dummy value
-   # into the $out variable to ensure we don't get an error message when 
-   # we try to use an undefined variable.
-   $out = "blah blah blah" unless $out;
-   #
-   #
-   # figure out type of wireless encryption used
-   $wireless_encryption = $out;					#assign more mnemonic variable name
-   chomp $wireless_encryption;					#remove newline
-   $wireless_encryption = "WEP"     if ( $wireless_encryption eq "1" );
-   $wireless_encryption = "TKIP"    if ( $wireless_encryption eq "2" );
-   $wireless_encryption = "AES"     if ( $wireless_encryption eq "4" );
-   $wireless_encryption = "WSEC"    if ( $wireless_encryption eq "8" );
-   $wireless_encryption = "unknown" if ( $wireless_encryption eq "blah blah blah");				#initialize variable
+   print "   running $cmd \n" if ($verbose eq "yes");
+   open(IN,"/usr/bin/ssh -q -p $params{port} $params{user}\@$host $cmd |");
+   while (<IN>) {
+      $wireless_encryption = "none"    if ( /0/ );
+      $wireless_encryption = "WEP"     if ( /1/ );
+      $wireless_encryption = "TKIP"    if ( /2/ );
+      $wireless_encryption = "AES"     if ( /4/ );
+      $wireless_encryption = "WSEC"    if ( /8/ );
+      $wireless_encryption = "unknown" if ( /^$/ );				#initialize variable
+   }								#end of while loop
+   close IN;							#close filehandle
+   print "   wireless encryption type: $wireless_encryption \n" if ($verbose eq "yes");
    #
    #
    # See how many wireless clients are connected
    $cmd = "/usr/sbin/wl assoclist | wc -l";	#define command to be run
    print "running $cmd \n" if ($verbose eq "yes");
-   ($out, $err, $exit) = $ssh->cmd($cmd);
+   open(IN,"/usr/bin/ssh -q -p $params{port} $params{user}\@$host $cmd |");
+   while (<IN>) {
+      $wireless_clients = $_;					#assign more meaningful variable name
+      chomp $wireless_clients;					#remove newline
+      if ( $wireless_clients =~ /^([0-9]+)/ ) {
+         print "   found $wireless_clients wireless clients \n" if ($verbose eq "yes");
+         #
+         $perf_data = "cpu_load_15min=$cpu_load_15min;;;; memused=$mem_used;;;; wireless_clients=$wireless_clients;;; ";  #capture performance data
+         #
+         if ( $wireless_clients >= 20 ) {			        # generate an alert and exit the script
+            print "$CHECK_NAME WARN - there are $wireless_clients wireless clients connected.  That's a lot.  To improve performance, you may wish to add more wireless access points to your network. | $perf_data \n";
+            exit $WARN;
+         }								#end of if block
+      }								#end of if block
+   }								#end of while loop
+   close IN;							#close filehandle
+}								#end of subroutine
+
+
+
+
+sub check_remote_management_via_http {
    #
-   # If there was nothing on STDOUT in the above command, put a dummy value
-   # into the $out variable to ensure we don't get an error message when 
-   # we try to use an undefined variable.
-   $out = "blah blah blah" unless $out;
+   # Check settings on the router to make sure there are no glaring security problems.
+   # We break the checks for HTTP and SSH into 2 separate subroutines, just to make it
+   # easier for someone to comment out a single subroutine if they do want to change
+   # the settings for either HTTP or SSH for their particular network.
+   # 
+   # HINT: If you want to skip this check, comment out the appropriate subroutine at the bottom of the script
+   #
+   # For security reasons, we do not want the web management interface of the router 
+   # to be exposed to the Internet.  
+   # However, we do expose the SSH daemon to the Internet, just because the sysadmin 
+   # sometimes uses SSH tunneling for a quick-and-dirty SOCKS proxy, or a poor-man' VPN for remote access.
    #
    #
-   # figure out number of connected wireless clients
-   $wireless_clients = $out;					#assign more mnemonic variable name
-   chomp $wireless_clients;					#remove newline
-   if ( $wireless_clients =~ /^([0-9]+)/ ) {
-      if ( $wireless_clients >= 10 ) {			        # generate an alert and exit the script
-         print "$CHECK_NAME WARN - there are $wireless_clients wireless clients connected.  That's a lot.  To improve performance, you may wish to add more wireless access points to your network. \n";
+   print "running check_remote_management_via_http subroutine \n" if ($verbose eq "yes");
+   #
+   return if ( $host =~ /router3/ ); 		#skip this router - the WAN connection is inside the corporate LAN - used for guest wifi
+   return if ( $host =~ /router4/ ); 		#skip this router - the WAN connection is inside the corporate LAN - used for guest wifi
+   return if ( $host =~ /192.168.1.3/ ); 	#skip this router - the WAN connection is inside the corporate LAN - used for guest wifi
+   return if ( $host =~ /192.168.1.4/ ); 	#skip this router - the WAN connection is inside the corporate LAN - used for guest wifi
+   return if ( $host =~ /dmzap1.nyx.local/ ); 	#skip this router - the WAN port is disabled and the LAN ports are used for DMZ wifi cameras
+
+   #
+   # These are the NVRAM settings on a DD-WRT router:
+   #     nvram show | grep remote
+   #       remote_management=0		(HTTP management 0=disabled 1=enabled)
+   #       remote_mgt_ssh=1		(SSH  management 0=disabled 1=enabled)
+   #
+   # These are the NVRAM settings on a Tomato router:
+   #     nvram show | grep remote
+   #       remote_management=0		(0=disabled 1=enabled)
+   #       sshd_remote=1		(SSH  management 0=disabled 1=enabled)
+   #
+   #
+   # alert if remote web-based management is enabled on a DD-WRT router
+   if ( exists $nvram{remote_mgt_ssh} ) {			#confirm we are dealing with a DD-WRT router
+      if ( $nvram{remote_management} == 1 ) {	
+         print "$CHECK_NAME WARN - the web management interface is exposed to the Internet.  This is a security risk.  If you need to manage this router remotely, you should use an SSH tunnel instead. Please click Administration, Management, Remote Access, Web GUI Management, Disable, Apply. | $perf_data \n";
+         exit $WARN;
+      }								#end of if block
+   }								#end of if block
+   #
+   # alert if remote web-based management is enabled on a Tomato router
+   if ( exists $nvram{sshd_remote} ) {				#confirm we are dealing with a Tomato router
+      if ( $nvram{remote_management} == 1 ) {	
+         print "$CHECK_NAME WARN - the web management interface is exposed to the Internet.  This is a security risk.  If you need to manage this router remotely, you should use an SSH tunnel instead. Please click Administration, Web Admin, Remote Access, Disabled, Save. | $perf_data \n";
          exit $WARN;
       }								#end of if block
    }								#end of if block
 }								#end of subroutine
+
+
+
+
+
+
+sub check_remote_management_via_ssh {
+   #
+   # Check settings on the router to make sure there are no glaring security problems.
+   # We break the checks for HTTP and SSH into 2 separate subroutines, just to make it
+   # easier for someone to comment out a single subroutine if they do want to change
+   # the settings for either HTTP or SSH for their particular network.
+   #
+   # HINT: If you want to skip this check, comment out the appropriate subroutine at the bottom of the script
+   #
+   # For security reasons, we do not want the web management interface of the router 
+   # to be exposed to the Internet.  
+   # However, we do expose the SSH daemon to the Internet, just because the sysadmin 
+   # sometimes uses SSH tunneling for a quick-and-dirty SOCKS proxy, or a poor-man' VPN for remote access.
+   #
+   #
+   print "running check_remote_management_via_ssh subroutine \n" if ($verbose eq "yes");
+   #
+   # These are the NVRAM settings on a DD-WRT router:
+   #     nvram show | grep remote
+   #       remote_management=0		(HTTP management 0=disabled 1=enabled)
+   #       remote_mgt_ssh=1		(SSH  management 0=disabled 1=enabled)
+   #
+   # These are the NVRAM settings on a Tomato router:
+   #     nvram show | grep remote
+   #       remote_management=0		(0=disabled 1=enabled)
+   #       sshd_remote=1		(SSH  management 0=disabled 1=enabled)
+   #
+   #
+   # check to see if the SSH daemon is exposed to the Internet (it should be)
+   # Yes, I realize that it's a bit silly to SSH into a router to see if the SSH daemon is enabled.
+   # However, it is possible that this script connects to the LAN-side of the router, so we want to be 
+   # warned in that event if the SSH daemon is not exposed to the Internet.
+   #
+   # alert if ssh daemon is NOT accessible to the Internet (ie we want remote access via ssh)
+   #
+   # This is the format used on a DD-WRT router
+   if ( exists $nvram{remote_mgt_ssh} ) {			#confirm we are dealing with a DD-WRT router
+      if ( $nvram{remote_mgt_ssh} == 0 ) {			#confirm we are dealing with a DD-WRT router
+         print "$CHECK_NAME WARN - SSH remote management is not enabled.  This means you cannot get into this router for remote management.  If you need to manage this router remotely, you should enable this feature. Please click Administration, Management, Remote Access, SSH Management, Enable, Apply. | $perf_data \n";
+         exit $WARN;
+      }								#end of if block
+   }								#end of if block
+   #
+   # alert if remote web-based management is enabled on a Tomato router
+   if ( exists $nvram{sshd_remote} ) {				#confirm we are dealing with a Tomato router
+      if ( $nvram{sshd_remote} == 0 ) {				#confirm we are dealing with a Tomato router
+         print "$CHECK_NAME WARN - SSH remote management is not enabled.  This means you cannot get into this router for remote management.  If you need to manage this router remotely, you should enable this feature. Please click Administration, Admin Access, SSH Enable at startup, Remote Access, Save. | $perf_data \n";
+         exit $WARN;
+      }								#end of if block
+   }								#end of if block
+}								#end of subroutine
+
+
+
+
+
+sub check_cron_daemon {
+   #
+   # confirm cron daemon is running
+   # We only need to check this on DD-WRT routers, as cron is always running on Tomato routers.
+   #
+   print "running check_cron_daemon subroutine \n" if ($verbose eq "yes");
+   #
+   # Confirm that cron daemon is enabled (required for scheduled reboots)
+   #
+   if ( exists $nvram{sch_rboot} ) {							#confirm hash element exists
+      $crond_status = "enabled"  if ( $nvram{sch_rboot}   =~ /1,[0-9]+,[0-9]+/ );	#this is the NVRAM setting on Tomato routers
+      $crond_status = "disabled" if ( $nvram{sch_rboot}   =~ /^0/ );			#this is the NVRAM setting on Tomato routers
+      print "   cron status is $crond_status \n" if ($verbose eq "yes");
+   }											#end of if block
+   #
+   #
+   #
+   #
+   if ( exists $nvram{cron_enable} ) {
+      $crond_status = "enabled"  if ( $nvram{cron_enable} == 1 );			#this is the NVRAM setting on DD-WRT routers
+      $crond_status = "disabled" if ( $nvram{cron_enable} == 0 );			#this is the NVRAM setting on DD-WRT routers
+      print "   cron status is $crond_status \n" if ($verbose eq "yes");
+      #
+      # alert if cron daemon is disabled (only applicable to DD-WRT.  Tomato routers always have cron enabled)
+      if ($nvram{cron_enable} == 0 ) {	
+         # generate an alert and exit the script
+         print "$CHECK_NAME WARN - cron daemon is not enabled.  We need cron running in order to schedule automated reboots. Please click Administration, Management, Cron, Enable, Apply. | $perf_data \n";
+         exit $WARN;
+      }											#end of if block
+   }											#end of if block
+}											#end of subroutine
+
+
+
+
+
+
+
+sub check_for_scheduled_reboot {
+   #
+   # These routers running the DD-WRT or Tomato firmware are generally consumer-grade routers.
+   # They tend to work better if they get restarted once in a while.
+   # This section confirms there is a daily reboot of the router.
+   #
+   # These are the NVRAM settings on a DD-WRT router:
+   #     nvram show | grep schedule
+   #       schedule_enable=1		(0=disabled 1=enabled)
+   #       schedule_hour=1		(1=reboot every X seconds, 2=reboot at same time each day)
+   #       schedule_time=3600		(reboot every 3600 seconds)
+   #       schedule_hours=23		(reboot at 23:59)   (does not use leading 0 for hours   less than 10)
+   #       schedule_minutes=59		(reboot at 23:59)   (does not use leading 0 for minutes less than 10)
+   #       schedule_weekdays=*		(*=everyday, 00=Sunday, 01=Monday, etc)
+   #
+   #
+   # These are the NVRAM settings on a Tomato router:
+   # You will notice that several of the entries have #,#,#
+   # The first number is 0=disabled 1=enabled, and usually turns the feature on or off
+   # The second number is the time of day calculated in number of minutes since midnight.  (0=midnight, 60=1am, 120=2am)
+   # The third number is the day(s) of the week (1=Sun, 2=Mon, 4=Tue, 8=Wed, 16=Thu, 32=Fri, 64=Sat)  
+   # You can add values together for multiple days of the week (Sun+Mon=1+2, Everyday=1+2+4+8+16+32+64)
+   #     nvram show | grep sch_
+   #       sch_rboot=1,210,127         (Scheduled reboot   0=disabled,1=enabled)
+   #       sch_rcon=0,0,127            (Scheduled reconnect - release/renew WAN IP 0=disabled,1=enabled)
+   #       sch_c1=0,-30,127            (Custom schedule 1  0=disabled,1=enabled)
+   #       sch_c1_cmd=                 (command to be run for Custom schedule 1)
+   #       sch_c2=0,-30,127            (Custom schedule 2  0=disabled,1=enabled)
+   #       sch_c2_cmd=                 (command to be run for Custom schedule 2)
+   #       sch_c3=0,-30,127            (Custom schedule 3  0=disabled,1=enabled)
+   #       sch_c3_cmd=                 (command to be run for Custom schedule 3)
+   #       sch_c4=0,-30,127            (Custom schedule 4  0=disabled,1=enabled)
+   #       sch_c4_cmd=                 (command to be run for Custom schedule 4)
+   #       sch_c5=0,-30,127            (Custom schedule 5  0=disabled,1=enabled)
+   #       sch_c5_cmd=                 (command to be run for Custom schedule 5)
+   #
+   #
+   print "running check_for_scheduled_reboot subroutine \n" if ($verbose eq "yes");
+   #
+   #
+   #
+   #
+   ## vestigial code removed from script - left here because it was interesting
+   ## We now have a multiline scalar variable $out
+   ## This is a nifty alternative to splitting the scalar into an array and using a while (<@array>) loop
+   #for (split /\n/, $out) {
+   #   # this section is for DD-WRT routers
+   #   $schedule_enable     = $1 if ( /schedule_enable=([0-1])/        ); #1=enable 0=disable
+   #   $schedule_weekdays   = $1 if ( /schedule_weekdays=(\*)/         ); # *=everyday
+   #   $schedule_weekdays   = $1 if ( /schedule_weekdays=([0-9][0-9])/ ); # 00=Sunday, 01=Monday, etc
+   #   $schedule_hours      = $1 if ( /schedule_hours=([0-9]+)/        ); #no leading zero for hours   <10
+   #   $schedule_minutes    = $1 if ( /schedule_minutes=([0-9]+)/      ); #no leading zero for minutes < 10
+   #   $schedule_hour_time  = $1 if ( /schedule_hour_time=([1-2])/     ); #1=reboot every X seconds, 2=reboot at set time
+   #   $schedule_time       = $1 if ( /schedule_time=([0-9]+)/         ); #number of seconds between reboots
+   #}							  		 #end of for loop
+   #
+   #
+   #
+   # This section is for Tomato routers
+   #
+   if ( exists $nvram{sch_rboot} ) {							#confirm hash element exists
+      $reboot_status = "enabled" if ( $nvram{sch_rboot} =~ /1\,[0-9]+\,[0-9]+/ );	#NVRAM setting on Tomato routers
+      print "   reboot status is $reboot_status \n" if ($verbose eq "yes");
+      #
+      # alert if scheduled reboots are disabled on Tomato router
+      if ( $nvram{sch_rboot} =~ /^0/ ) {	
+         print "$CHECK_NAME WARN - scheduled reboots are disabled.  Consumer-grade routers often lock up, so scheduling automatic reboots tends to make the router more reliable. Please click Administration, Scheduler, Reboot, Enabled, 05:00 Everyday, Save. | $perf_data \n";
+         exit $WARN;
+      }										#end of if block
+      #	
+      # alert if Tomato router does not reboot every single day
+      if ( $nvram{sch_rboot} ) {						#confirm we are dealing with a Tomato router
+         unless ( $nvram{sch_rboot} =~ /1,[0-9]+,127/ ) {			#127 in third field means reboot every day.  Look a little higher up in this script for details.
+            print "$CHECK_NAME WARN - This router is not scheduled to reboot every day of the week.  Consumer-grade routers often lock up, so scheduling automatic reboots tends to make the router more reliable. Please click Administration, Scheduler, Reboot, Enabled, 05:00 Everyday, Save. | $perf_data \n";
+            exit $WARN;
+         }									#end of unless block
+      }										#end of if block
+      #
+      # This section is for Tomato routers
+      if ( $nvram{sch_rboot} =~ /1,([0-9]+),[0-9]+/ ) {				#confirm we are dealing with a Tomato router
+         if ( $1 > 480 ) {							#the 2nd field is the number of minutes since midnight.  So, 8am=8*60=480
+            print "$CHECK_NAME WARN - the router is scheduled to reboot after 8am. To avoid interrupting users, please schedule the reboot sometime between midnight at 8am.  Please click Administration, Scheduler, Reboot enable, At a Set Time, 05:00 Everyday, Save. | $perf_data \n";
+            exit $WARN;
+         }									#end of if block
+      }										#end of if block
+   }										#end of if block
+   #
+   # This section is for DD-WRT  routers
+   #
+   if ( exists $nvram{schedule_enable} ) {					#confirm hash element exists
+      $reboot_status = "enabled" if ( $nvram{schedule_enable} == 1 );		#NVRAM setting on DD-WRT routers	
+      #
+      # alert if scheduled reboots are disabled on DD-WRT router
+      if ( $nvram{schedule_enable} == 0 ) {	
+         print "$CHECK_NAME WARN - scheduled reboots are disabled.  Consumer-grade routers often lock up, so scheduling automatic reboots tends to make the router more reliable. Please click Administration, Keep Alive, Schedule Reboot, Enable, At a Set Time, 05:00 Everyday, Apply. | $perf_data \n";
+         exit $WARN;
+      }										#end of if block
+      #							
+      # alert if DD-WRT router does not reboot every single day
+      if ( $nvram{schedule_weekdays} ) {					#confirm we are dealing with a DD-WRT router
+         unless ( $nvram{schedule_weekdays} eq "*" ) {				# * means reboot every day, 00=Sunday, 01=Monday, etc
+            print "$CHECK_NAME WARN - scheduled reboots are disabled.  Consumer-grade routers often lock up, so scheduling automatic reboots tends to make the router more reliable. Please click Administration, Scheduler, Reboot, Enabled, 05:00 Everyday, Save. | $perf_data \n";
+            exit $WARN;
+         }									#end of unless block
+      }										#end of if block
+      #
+      # alert if the DD-WRT router is scheduled to automatically reboot every X seconds instead of at the same time every day
+      # It would be bad to have the router reboot every X seconds, because it would go down at inopportune times.
+      if ( $nvram{schedule_hours} == 1 ) {				#1=reboot every X seconds, 2=reboot at set time
+         print "$CHECK_NAME WARN - the router is not scheduled to automatically reboot at the same time every day.  The scheduled reboot should be a specific time between midnight-8am, rather than a set number of seconds after the last reboot.  Please click Administration, Keep Alive, Schedule Reboot, Enable, At a Set Time, 05:00 Everyday, Apply. | $perf_data \n";
+         exit $WARN;
+      }										#end of if block
+      #
+      #
+      # We don't really care the exact time the router reboots every day, so long as it is not between 8am and midnight.
+      # Send an alert if the router is scheduled to reboot anytime between 8am and midnight.
+      #
+      # This section is for DD-WRT routers
+      # Note that there are no leading zeros before the hours or minutes
+      if ( $nvram{schedule_hours} =~ /[0-9]+/ ) {				#confirm we are dealing with a DD-WRT router
+         if ( $nvram{schedule_hours} >= 8 ) {					#hour to reboot in 24-hour time.  We want to reboot between midnight and 8am.
+            print "$CHECK_NAME WARN - the router is scheduled to reboot after 8am.  To avoid interrupting users, please schedule the reboot sometime between midnight at 8am.  Please click Administration, Keep Alive, Schedule Reboot, Enable, At a Set Time, 05:00 Everyday, Apply. | $perf_data \n";
+            exit $WARN;
+         }									#end of if block
+      }										#end of if block
+   }										#end of if block
+
+}										#end of subroutine
+
+
+
+
+
+
+
+
+sub check_telnet_daemon {
+   #
+   # Confirm telnet daemon is NOT running.  Best practice dictates using SSH instead of telnet.
+   #
+   print "running check_telnet_daemon subroutine \n" if ($verbose eq "yes");
+   #
+   #
+   #
+   if ( exists $nvram{telnetd_enable} ) {							#confirm we are dealing with a DD-WRT router
+      $telnetd_status = "disabled" if ( $nvram{telnetd_enable} eq "0" );	#this is the NVRAM setting on DD-WRT routers
+      $telnetd_status = "enabled"  if ( $nvram{telnetd_enable} eq "1" );	#this is the NVRAM setting on DD-WRT routers
+      print "   telnet daemon is $telnetd_status \n" if ($verbose eq "yes");
+      #
+      # alert if telnet daemon is enabled (on DD-WRT routers)
+      if ($nvram{telnetd_enable} == 1 ) {	
+         print "$CHECK_NAME WARN - telnet daemon is enabled.  You should disable the telnet daemon and use SSH instead. Please click Services, Services, Telnet, Disable, Apply. | $perf_data \n";
+         exit $WARN;
+      }									#end of if block
+   }									#end of if block
+   #
+   #
+   #
+   #
+   if ( exists $nvram{telnetd_eas} ) {						#confirm we are dealing with a Tomato router
+      $telnetd_status = "disabled" if ( $nvram{telnetd_eas} == 0 );	#this is the NVRAM setting on Tomato routers (eas=Enabled At Startup)
+      $telnetd_status = "enabled"  if ( $nvram{telnetd_eas} == 1 );	#this is the NVRAM setting on Tomato routers (eas=Enabled At Startup)
+      print "   telnet daemon is $telnetd_status \n" if ($verbose eq "yes");
+      #
+      # alert if telnet daemon is enabled (on Tomato routers)	
+      if ($nvram{telnetd_eas} == 1 ) {	
+         print "$CHECK_NAME WARN - telnet daemon is enabled.  You should disable the telnet daemon and use SSH instead. Please click Administration, Admin Access, Telnet Daemon, uncheck checkbox, Save. | $perf_data \n";
+         exit $WARN;
+      }									#end of if block
+   }									#end of if block
+   #
+   #
+   # Only run this section if we could not figure out the status of the telnet daemon
+   if ( $telnetd_status eq "" ) {
+         print "$CHECK_NAME UNKNOWN - could not determine status of telnet daemon.  Please investigate. | $perf_data \n";
+         exit $UNKNOWN;
+   }									#end of if block
+}									#end of subroutine
+
+
+
+
+
+
+
+
+
+sub check_ssh_daemon {
+   #
+   # Check to see which port the SSH daemon is listening on.
+   #
+   print "running check_ssh_daemon subroutine \n" if ($verbose eq "yes");
+   #
+   # These are the NVRAM settings on DD-WRT routers:
+   #   nvram show | grep ^sshd_
+   #    
+   #
+   #
+   if ( exists $nvram{sshd_enable} ) {							#confirm we are dealing with a DD-WRT router
+      $sshd_status = "enabled"  if ( $nvram{sshd_enable} == 1 );			#this is the NVRAM setting on DD-WRT routers
+      $sshd_status = "disabled" if ( $nvram{sshd_enable} == 0 );			#this is the NVRAM setting on DD-WRT routers
+      print "   ssh daemon is $sshd_status \n" if ($verbose eq "yes");
+      #
+      # alert if ssh daemon is disabled (on DD-WRT routers)
+      if ($nvram{sshd_enable} == 0 ) {	
+         print "$CHECK_NAME WARN - SSH daemon is disabled.  You should enable the SSH daemon for remote administration. Please click Services, Services, SSH, Enable, Apply. | $perf_data \n";
+         exit $WARN;
+      }										#end of if block
+      #
+      # These are the NVRAM settings on DD-WRT routers
+      $sshd_port    = "22" unless ( $nvram{sshd_port} );			#set to default port 22 if the hash element does not exist 
+      $sshd_port    = "22" if     ( $nvram{sshd_port} eq "" );			#may be blank if left at default of port 22
+      $sshd_port    = "$1" if     ( $nvram{sshd_port} =~ /([0-9]+)/ );		#capture the number the sshd_port is listening on
+      $sshd_wanport = "22" if     ( $nvram{sshd_wanport} eq "" );		#may be blank if left at default of port 22
+      $sshd_wanport = "$1" if     ( $nvram{sshd_wanport} =~ /([0-9]+)/ );	#capture the number the sshd_port is listening on
+   }										#end of if block
+   #
+   #
+   if ( exists $nvram{sshd_eas} ) {						#confirm we are dealing with a Tomato router
+      $sshd_status = "enabled"  if ( $nvram{sshd_eas} == 1 );		#this is the NVRAM setting on Tomato routers (eas=Enabled At Startup)
+      $sshd_status = "disabled" if ( $nvram{sshd_eas} == 0 );			#this is the NVRAM setting on DD-WRT routers
+      print "   ssh daemon is $sshd_status \n" if ($verbose eq "yes");
+      #
+      # alert if ssh daemon is disabled (on Tomato routers)	
+      if ($nvram{sshd_eas} == 0 ) {	
+         print "$CHECK_NAME WARN - SSH daemon is disabled.  You should enable the SSH daemon for remote administration. Please click Administration, Admin Access, SSH Daemon, enable checkbox, Save. | $perf_data \n";
+         exit $WARN;
+      }									#end of if block
+      #
+      # These are the NVRAM settings on Tomato routers
+      $sshd_port    = "22" unless ( $nvram{sshd_port} );		#set to default port 22 if the hash element does not exist 
+      $sshd_port    = "22" if     ( $nvram{sshd_port} eq "" );		#may be blank if left at default of port 22
+      $sshd_port    = "$1" if     ( $nvram{sshd_port} =~ /([0-9]+)/ );	#capture the number the sshd_port is listening on
+      $sshd_port    = "22" unless ( $nvram{sshd_rport} );		#set to default port 22 if the hash element does not exist 
+      $sshd_wanport = "22" if     ( $nvram{sshd_rport} eq "" );		#may be blank if left at default of port 22
+      $sshd_wanport = "$1" if     ( $nvram{sshd_rport} =~ /([0-9]+)/ );	#capture the number the sshd_port is listening on
+   }									#end of if block
+   #
+   #
+   # Only run this section if we could not figure out the status of the SSH daemon
+   if ( $sshd_status eq "" ) {
+         print "$CHECK_NAME UNKNOWN - could not determine status of SSH daemon.  Please investigate. | $perf_data \n";
+         exit $UNKNOWN;
+   }									#end of if block
+}									#end of subroutine
+
+
+
+
+
+
+
+sub check_syslog_daemon {
+   #
+   # Confirm syslog daemon is running and logging to a remote host
+   #
+   print "running check_syslog_daemon subroutine \n" if ($verbose eq "yes");
+   #
+    # These are the NVRAM settings on a DD-WRT router:
+   #   nvram show | grep ^syslogd
+   #     syslogd_enable=1		 (0=disabled, 1=enabled)
+   #     syslogd_rem_ip=192.168.1.20     (IP address of syslog host)
+   #
+   #
+   # These are the NVRAM settings on a Tomato router:
+   #   nvram show | grep ^log_remote
+   #     log_remote=0                   (0=disabled, 1=enabled)
+   #     log_remoteip=192.168.1.20      (IP address of syslog host)
+   #     log_remoteport=514             (UDP port used for syslog)
+   #
+   #
+   #
+   # Populate variables for later use in the printed output message
+   if ( exists $nvram{syslogd_enable} ) {					#confirm we are dealing with a DD-WRT router
+      $syslogd_status = "enabled"  if ( $nvram{syslogd_enable} == 1 );	    	#setting on DD-WRT routers
+      $syslogd_status = "disabled" if ( $nvram{syslogd_enable} == 0 );	    	#setting on DD-WRT routers
+      print "   syslog daemon is $syslogd_status \n" if ($verbose eq "yes");
+   }										#end of if block
+   if ( exists $nvram{log_remote} ) {						#confirm we are dealing with a Tomato
+      $syslogd_status = "enabled"  if ( $nvram{log_remote} == 1 );	    	#setting on Tomato routers
+      $syslogd_status = "disabled" if ( $nvram{log_remote} == 0 );	    	#setting on Tomato routers
+      print "   syslog daemon is $syslogd_status \n" if ($verbose eq "yes");
+   }										#end of if block
+   if ( exists $nvram{syslogd_rem_ip} ) {					#confirm we are dealing with a DD-WRT router
+      $syslogd_rem_ip = $1        if ( $nvram{syslogd_rem_ip} =~ /([0-9\.]+)/ );  #setting on DD-WRT routers
+      print "   syslog entries are sent to $syslogd_rem_ip \n" if ($verbose eq "yes");
+   }										#end of if block
+   if ( exists $nvram{log_remoteip} ) {						#confirm we are dealing with a Tomato
+      $syslogd_rem_ip = $1        if ( $nvram{log_remoteip} =~ /([0-9\.]+)/ );  #setting on Tomato routers
+      print "   syslog entries are sent to $syslogd_rem_ip \n" if ($verbose eq "yes");
+   }										#end of if block
+   #
+   #
+   if ( exists $nvram{syslogd_enable} ) {					#confirm we are dealing with a DD-WRT router
+      # Alert if syslog is disabled on DD-WRT router
+      if ( $nvram{syslogd_enable} == 0 ) {
+         print "$CHECK_NAME WARN - The syslog daemon is disabled.  You should be logging to a remote host. Please click Services, Syslogd: enable, Remote logging host, Save, Apply. | $perf_data \n";
+         exit $WARN;
+      }										#end of if block
+      #
+      # Alert if syslog is enabled but there is no remote logging host on DD-WRT router
+      if ( $nvram{syslogd_enable} == 1 ) {					#confirm we are dealing with a DD-WRT router
+         if ( $syslogd_rem_ip eq "unknown" ) {
+            print "$CHECK_NAME WARN - The syslog daemon is enabled, but there is no remote logging host.  You should be logging to a remote host.  Please click Services, Syslogd: enable, Remote logging host, Save, Apply. | $perf_data \n";
+            exit $WARN;
+         }									#end of if block
+      }										#end of if block
+   }										#end of if block
+   #
+   #
+   if ( exists $nvram{log_remote} ) {						#confirm we are dealing with a Tomato
+      #
+      # Alert if syslog is disabled on Tomato router
+      if ( $nvram{log_remote} == 0 ) {
+         print "$CHECK_NAME WARN - The syslog daemon is disabled.  You should be logging to a remote host. Please click Administration, Logging, Log to remote system:IPaddr, Save. | $perf_data \n";
+         exit $WARN;
+      }										#end of if block
+      #
+      # Alert if syslog is enabled but there is no remote logging host on Tomato router
+      if ( $nvram{log_remote} == 1 ) {						#confirm we are dealing with a DD-WRT router
+         if ( $syslogd_rem_ip eq "unknown" ) {
+            print "$CHECK_NAME WARN - The syslog daemon is enabled, but there is no remote logging host.  You should be logging to a remote host.  Please click Administration, Logging, Log to remote host, IP address of syslog server, Select the events you wish to log, Save. | $perf_data \n";
+            exit $WARN;
+         }									#end of if block
+      }										#end of if block
+   }										#end of if block
+}										#end of subroutine
+
+
+
+
+
+
+
+
+sub check_ntp_daemon {
+   #
+   # Confirm router is synchronizing time against a Network Time Protocol server
+   #
+   print "running check_ntp_daemon subroutine \n" if ($verbose eq "yes");
+   #
+   # These are the NVRAM settings on a DD-WRT router:
+   #     nvram show | grep ntp_
+   #        ntp_enable=1
+   #        ntp_server=0.ca.pool.ntp.org
+   #        ntp_mode=auto
+   #
+   # These are the NVRAM settings on a Tomato router:
+   #     nvram show | grep ntp_
+   #       ntp_kiss=
+   #       ntp_kiss_ignore=
+   #       ntp_server=0.north-america.pool.ntp.org 1.north-america.pool.ntp.org 2.north-america.pool.ntp.org
+   #       ntp_tdod=0
+   #       ntp_updates=24
+   #
+   #
+   #
+   if ( exists $nvram{ntp_server} ) {					#capture the remote NTP server on DD-WRT router (same as Tomato)
+      $ntp_rem_ip = "$1" if ( $nvram{ntp_server} =~ /([a-zA-Z0-9\.\- ]+)/ );	
+   } 									#end of if block
+   #
+   if ( exists $nvram{ntp_enable} ) {						#confirm we are dealing with a DD-WRT router
+      if ( $nvram{ntp_enable} == 0 ) {	
+         print "$CHECK_NAME WARN - NTP daemon is not enabled.  You should have time sync configured because your router time will reset to 00:00 during reboots.  You want accurate time so the scheduled reboot happens when you expect it to.  Please click Setup, Time Settings, NTP Client: enable, set time zone and NTP server, Save, Apply. | $perf_data \n";
+         exit $WARN;
+      } 								#end of if block
+      if ( $ntp_rem_ip eq "unknown" ) {	
+         print "$CHECK_NAME WARN - There are no NTP servers defined.  You should have time sync configured because your router time will reset to 00:00 during reboots.  You want accurate time so the scheduled reboot happens when you expect it to.  Please click Setup, Time Settings, NTP Client: enable, set time zone and NTP server, Save, Apply. | $perf_data \n";
+         exit $WARN;
+      } 								#end of if block
+   } 									#end of if block
+   #
+   #
+   #
+   #
+   if ( exists $nvram{ntp_updates} ) {					#confirm we are dealing with a Tomato router
+      #
+      # alert if ntp is disabled on Tomato routers
+      if ( $nvram{ntp_updates} == 0 ) {	
+         print "$CHECK_NAME WARN - NTP daemon is not enabled.  You should have time sync configured because your router time will reset to 00:00 during reboots.  You want accurate time so the scheduled reboot happens when you expect it to.  Please click Basic, Time, Auto Update Time, every 24 hours, Select time servers, Save. | $perf_data \n";
+         exit $WARN;
+      } 								#end of if block
+      #
+      # alert if there are no time servers defined on Tomato routers
+      if ( $ntp_rem_ip eq "unknown" ) {	
+         print "$CHECK_NAME WARN - There are no NTP servers defined.  You should have time sync configured because your router time will reset to 00:00 during reboots.  You want accurate time so the scheduled reboot happens when you expect it to.  Please click Basic, Time, Auto Update Time, every 24 hours, Select time servers, Save. | $perf_data \n";
+         exit $WARN;
+      } 							#end of if block
+   } 								#end of if block
+}								#end of subroutine
+
+
+
+
+
+
+sub check_snmp_daemon {
+   #
+   # Confirm the SNMP daemon is running
+   #
+   #
+   print "running check_snmp_daemon subroutine \n" if ($verbose eq "yes");
+   #
+   # 
+   # This is the output on a DD-WRT router:
+   #    nvram show | grep snmp
+   #      snmp_syscontact=root
+   #      snmpd_enable=1
+   #      snmp_syslocation=Unknown
+   #      snmp_sysname=Unknown
+   #      snmp_port=161
+   #      snmpd_rocommunity=public
+   #      snmpd_rwcommunity=private
+   #      snmpd_conf=
+   #
+   # This is the output on a Tomato router:
+   #    nvram show | grep snmp
+   #      snmp_contact=
+   #      snmp_enable=1
+   #      snmp_location=core router
+   #      snmp_port=161
+   #      snmp_remote=1
+   #      snmp_remote_sip=192.168.0.0/24
+   #      snmp_ro=public
+   #
+   #
+   #
+   if ( exists $nvram{snmpd_enable} ) {					#confirm we are dealing with a DD-WRT router
+      #
+      $snmpd_status = "enabled"  if ( $nvram{snmpd_enable} == 1 );	# 0=disabled 1=enabled on a DD-WRT router
+      $snmpd_status = "disabled" if ( $nvram{snmpd_enable} == 0 );	# 0=disabled 1=enabled on a DD-WRT router
+      print "   snmp daemon is $snmpd_status \n" if ($verbose eq "yes");
+      #
+      # alert if SNMP daemon is disabled on a DD-WRT router
+      if ($nvram{snmpd_enable} == 0 ) {	
+         print "$CHECK_NAME WARN - SNMP daemon is not enabled.  We need SNMP running to gather traffic statistics on the ethernet interfaces. Please click Administration, Management, SNMP, Enable, Apply. | $perf_data \n";
+         exit $WARN;
+      }									#end of if block
+   }									#end of if block
+   #
+   #
+   #
+   #
+   if ( exists $nvram{snmp_enable} ) {					#confirm we are dealing with a Tomato router
+      #
+      $snmpd_status = "enabled"  if ( $nvram{snmp_enable} == 1 );	# 0=disabled 1=enabled on a Tomato router
+      $snmpd_status = "disabled" if ( $nvram{snmp_enable} == 0 );	# 0=disabled 1=enabled on a Tomato router
+      print "   snmp daemon is $snmpd_status \n" if ($verbose eq "yes");
+      #
+      # alert if SNMP daemon is disabled on a Tomato router
+      if ($nvram{snmp_enable} == 0 ) {	
+         print "$CHECK_NAME WARN - SNMP daemon is not enabled.  We need SNMP running to gather traffic statistics on the ethernet interfaces. Please click Administration, SNMP, Enable SNMP, Save. | $perf_data \n";
+         exit $WARN;
+      }									#end of if block
+   }									#end of if block
+}									#end of subroutine
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1128,48 +1197,46 @@ sub check_internet_connection {
    #      wan_gateway=70.72.240.1
    #      wan_ipaddr=70.72.240.17
    #
-   $cmd = "nvram show | grep ^wan_";	#define command to be run
-   print "running $cmd \n" if ($verbose eq "yes");
-   ($out, $err, $exit) = $ssh->cmd($cmd);
-   #
-   # If there was nothing on STDOUT in the above command, put a dummy value
-   # into the $out variable to ensure we don't get an error message when 
-   # we try to use an undefined variable.
-   $out = "blah blah blah" unless $out;
    #
    #
-   $wan_ipaddr  = $1 if ( $out =~ /wan_ipaddr=([0-9\.]+)/ );		#capture the IP address of the WAN-side connection in a variable for later use
-   $wan_gateway = $1 if ( $out =~ /wan_gateway=([0-9\.]+)/ );		#capture the default gateway for the WAN-side connection in a variable for later use
+   if ( exists $nvram{wan_ipaddr} ) {					#confirm the hash element exists (same for DD-WRT and Tomato routers)
+      $wan_ipaddr  = $1 if ( $nvram{wan_ipaddr} =~ /([0-9\.]+)/ );	#capture the IP address of the WAN-side connection in a variable for later use
+      print "   WAN IP address is: $wan_ipaddr \n" if ($verbose eq "yes");
+   }									#end of if block
+   if ( exists $nvram{wan_gateway} ) {					#confirm the hash element exists (same for DD-WRT and Tomato routers)
+      $wan_gateway = $1 if ( $nvram{wan_gateway} =~ /([0-9\.]+)/ );	#capture the default gateway for the WAN-side connection in a variable for later use
+      print "   WAN gateway address is: $wan_gateway \n" if ($verbose eq "yes");
+   }									#end of if block
    #
    # Alert if WAN-side IP address is blank
    if ( $wan_ipaddr eq "" ) {
-      print "$CHECK_NAME WARN - there is no WAN-side IP address, which means there is no connection to the Internet.  Try rebooting the router or checking your Internet connection. \n";
+      print "$CHECK_NAME WARN - there is no WAN-side IP address, which means there is no connection to the Internet.  Try rebooting the router or checking your Internet connection. | $perf_data \n";
       exit $WARN;
    }								#end of if block
    #
    # Alert if WAN-side default gateway is blank
    if ( $wan_gateway eq "" ) {
-      print "$CHECK_NAME WARN - there is no WAN-side default gateway, which means the network traffic has no route to the Internet.  Try rebooting the router or checking your Internet connection. \n";
+      print "$CHECK_NAME WARN - there is no WAN-side default gateway, which means the network traffic has no route to the Internet.  Try rebooting the router or checking your Internet connection. | $perf_data \n";
       exit $WARN;
    }								#end of if block
    #
    #
    # Try to ping the WAN gateway.  This will confirm we have access to the Internet (or at least the upstream router)
+   print "   attempting to ping WAN gateway $wan_gateway to validate Internet access \n" if ($verbose eq "yes");
    $cmd = "ping -c 1 $wan_gateway";	#define command to be run
-   print "running $cmd \n" if ($verbose eq "yes");
-   ($out, $err, $exit) = $ssh->cmd($cmd);
-   #
-   # If there was nothing on STDOUT in the above command, put a dummy value
-   # into the $out variable to ensure we don't get an error message when 
-   # we try to use an undefined variable.
-   $out = "blah blah blah" unless $out;
-   #
-   # Alert if no ping reply from WAN gateway 
-   if ( $out =~ /100\% packet loss/ ) {
-      print "$CHECK_NAME WARN - no ping reply from WAN gateway $wan_gateway.  You may not have Internet access.  Try rebooting the router or checking your Internet connection. \n";
-      exit $WARN;
-   }								#end of if block
+   open(IN,"/usr/bin/ssh -q -p $params{port} $params{user}\@$host $cmd |");
+   while (<IN>) {
+      #
+      # Alert if no ping reply from WAN gateway 
+      if ( /100\% packet loss/ ) {
+         print "$CHECK_NAME WARN - no ping reply from WAN gateway $wan_gateway.  You may not have Internet access.  Try rebooting the router or checking your Internet connection. | $perf_data \n";
+         exit $WARN;
+      }								#end of if block
+   }								#end of while loop
+   close IN;							#close filehandle
 }								#end of subroutine
+
+
 
 
 
@@ -1186,18 +1253,21 @@ sub check_dhcp {
    #      lan_proto=static           <----- DHCP is not enabled
    #      lan_proto=dhcp             <----- DHCP is     enabled
    #
-   $cmd = "nvram show | grep ^lan_proto=";	#define command to be run
-   print "running $cmd \n" if ($verbose eq "yes");
-   ($out, $err, $exit) = $ssh->cmd($cmd);
    #
-   # If there was nothing on STDOUT in the above command, put a dummy value
-   # into the $out variable to ensure we don't get an error message when 
-   # we try to use an undefined variable.
-   $out = "blah blah blah" unless $out;
-   #
-   #
-   $lan_proto = $1 if ( $out =~ /lan_proto=([a-z]+)/ );	#valid options are lan_proto=static or lan_proto=dhcp
+   if ( exists $nvram{lan_proto} ) {
+      $lan_proto = $1 if ( $nvram{lan_proto} =~ /([a-z]+)/ );	#valid options are lan_proto=static or lan_proto=dhcp
+      #
+      if ( $nvram{lan_proto} eq "dhcp" ) {
+         print "   this router is     a DHCP server \n" if ($verbose eq "yes");
+      }								#end of if block
+      if ( $nvram{lan_proto} eq "static" ) {
+         print "   this router is not a DHCP server \n" if ($verbose eq "yes");
+      }								#end of if block
+   }								#end of if block
 }								#end of subroutine
+
+
+
 
 
 sub check_dns {
@@ -1211,103 +1281,117 @@ sub check_dns {
    #      wan_get_dns=8.8.4.4 8.8.8.8
    #
    # This is the output on a Tomato router:
-   #    nvram show | grep ns=
+   #    nvram show | grep dns=
    #      wan_dns=8.8.4.4 8.8.8.8
+   #
+   #
+   #
+   #
+   #
+   #
+   if ( exists $nvram{wan_get_dns} ) {							#confirm we are dealing with a DD-WRT router
+      $wan_dns1 = $1 if ( $nvram{wan_get_dns} =~ /([0-9\.]+)/ );	 		#allow for only a single DNS server
+      $wan_dns1 = $1 if ( $nvram{wan_get_dns} =~ /([0-9\.]+) +([0-9\.]+)/ ); 		#capture the first  DNS server for later use (DD-WRT syntax)
+      $wan_dns2 = $2 if ( $nvram{wan_get_dns} =~ /([0-9\.]+) +([0-9\.]+)/ ); 		#capture the second DNS server for later use (DD-WRT syntax)
+      print "   DNS servers: $nvram{wan_get_dns} \n" if ($verbose eq "yes");
+      print "   DNS1: $wan_dns1 \n"                  if ($verbose eq "yes");
+      print "   DNS2: $wan_dns2 \n"                  if ($verbose eq "yes");
+   }											#end of if block
+   if ( exists $nvram{wan_dns} ) {							#confirm we are dealing with a Tomato router
+      $wan_dns1 = $1 if ( $nvram{wan_dns} =~ /([0-9\.]+)/ );		 		#allow for only a single DNS server
+      $wan_dns1 = $1 if ( $nvram{wan_dns} =~ /([0-9\.]+) +([0-9\.]+)/ );		#capture the first  DNS server for later use (Tomato syntax)
+      $wan_dns2 = $2 if ( $nvram{wan_dns} =~ /([0-9\.]+) +([0-9\.]+)/ );		#capture the second DNS server for later use (Tomato syntax)
+      print "   DNS servers: $nvram{wan_dns} \n" if ($verbose eq "yes");
+      print "   DNS1: $wan_dns1 \n"                  if ($verbose eq "yes");
+      print "   DNS2: $wan_dns2 \n"                  if ($verbose eq "yes");
+   }											#end of if block
+   #
    #
    #
    # Break out of this subroutine if the router is not a DHCP server.
    # If the router is not a DHCP server (ie it is just an access point), then it is probably not a DNS server either.
-   return unless ( $lan_proto eq "dhcp" );
+   unless ( $lan_proto eq "dhcp" ) {
+      print "   this router is not a DHCP server - skipping checks for DNS servers \n" if ($verbose eq "yes");
+   }
+   return unless ( $lan_proto eq "dhcp" );					#break out of subroutine
    #
    #
-   $cmd = "nvram show | grep dns=";	#define command to be run
-   print "running $cmd \n" if ($verbose eq "yes");
-   ($out, $err, $exit) = $ssh->cmd($cmd);
-   #
-   # If there was nothing on STDOUT in the above command, put a dummy value
-   # into the $out variable to ensure we don't get an error message when 
-   # we try to use an undefined variable.
-   $out = "blah blah blah" unless $out;
-   #
-   #
-   $wan_dns1 = $1 if ( $out =~ /wan_get_dns=([0-9\.]+) +([0-9\.]+)/ );	#capture the first  DNS server in a variable for later use (DD-WRT syntax)
-   $wan_dns2 = $2 if ( $out =~ /wan_get_dns=([0-9\.]+) +([0-9\.]+)/ );	#capture the second DNS server in a variable for later use (DD-WRT syntax)
-   $wan_dns1 = $1 if ( $out =~ /wan_dns=([0-9\.]+) +([0-9\.]+)/ );	#capture the first  DNS server in a variable for later use (Tomato syntax)
-   $wan_dns2 = $2 if ( $out =~ /wan_dns=([0-9\.]+) +([0-9\.]+)/ );	#capture the second DNS server in a variable for later use (Tomato syntax)
    #
    # Alert if the first DNS server entry is blank
    if ( $wan_dns1 eq "" ) {
-      print "$CHECK_NAME WARN - there is no primary DNS server listed, which means this router cannot perform name resolution.  If you are have a dynamic WAN address, your ISP should provide your DNS servers.  If you have a static IP address, you may need to add the DNS servers manually. \n";
+      print "$CHECK_NAME WARN - there is no primary DNS server listed, which means this router cannot perform name resolution.  If you have a dynamic WAN address, your ISP should provide your DNS servers.  If you have a static IP address, you may need to add the DNS servers manually. | $perf_data \n";
       exit $WARN;
    }								#end of if block
    #
    # Alert if the secondary DNS server entry is blank
    if ( $wan_dns2 eq "" ) {
-      print "$CHECK_NAME WARN - there is no secondary DNS server listed, which makes the primary DNS server $wan_dns1 a single point of failure.  Please add a secondary DNS server.  \n";
+      print "$CHECK_NAME WARN - there is no secondary DNS server listed, which makes the primary DNS server $wan_dns1 a single point of failure.  Please add a secondary DNS server. | $perf_data \n";
       exit $WARN;
    }								#end of if block
    #
    #
    # Try to query the primary name server 
-   # We use the example.com domain, because it should always exist.
-   $cmd = "nslookup example.com $wan_dns1";	#define command to be run
-   print "running $cmd \n" if ($verbose eq "yes");
-   ($out, $err, $exit) = $ssh->cmd($cmd);
-   #
-   # If there was nothing on STDOUT in the above command, put a dummy value
-   # into the $out variable to ensure we don't get an error message when 
-   # we try to use an undefined variable.
-   $out = "blah blah blah" unless $out;
-   #
-   # Alert if bad reply from primary DNS server
-   if ( $out =~ /Server: +Unknown/i ) {
-      print "$CHECK_NAME WARN - no reply to DNS lookup from primary DNS server $wan_dns1.  Please check the DNS server settings on the router. \n";
-      exit $WARN;
-   }								#end of if block
-   #
-   # Alert if bad reply from primary DNS server
-   if ( $out =~ /Non-existent domain/i ) {
-      print "$CHECK_NAME WARN - Received Non-existent domain reply to DNS lookup from primary DNS server $wan_dns1.  Please check the DNS server settings on the router. \n";
-      exit $WARN;
-   }								#end of if block
-   #
-   # Alert if bad reply from primary DNS server
-   # We are making the assumption that the IP address of example.com has not changed from 93.184.216.119
-   unless ( $out =~ /93.184.216.119/ ) {
-      print "$CHECK_NAME WARN - Did not receive the expected IP address when performing DNS query against example.com using primary DNS server $wan_dns1. Please check the DNS server settings on the router. \n";
-      exit $WARN;
-   }								#end of unless block
+   # We use the iana.org domain, because it should always exist.
+   $cmd = "nslookup iana.org $wan_dns1 | tail -n 1";
+   print "   running command $cmd \n" if ($verbose eq "yes");
+   open(IN,"/usr/bin/ssh -q -p $params{port} $params{user}\@$host $cmd  |");
+   while (<IN>) {
+      #
+      # Alert if bad reply from primary DNS server
+      if ( /Server: +Unknown/i ) {
+         print "$CHECK_NAME WARN - no reply to DNS lookup from primary DNS server $wan_dns1.  Please check the DNS server settings on the router. | $perf_data \n";
+         exit $WARN;
+      }								#end of if block
+      #
+      # Alert if bad reply from primary DNS server
+      if ( /Non-existent domain/i ) {
+         print "$CHECK_NAME WARN - Received Non-existent domain reply to DNS lookup from primary DNS server $wan_dns1.  Please check the DNS server settings on the router. | $perf_data \n";
+         exit $WARN;
+      }								#end of if block
+      #
+      # Alert if bad reply from primary DNS server
+      # We are making the assumption that the IP address of iana.org has not changed from 192.0.43.8
+      if ( /([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)/ ) {
+         $iana_org_received = $1;				#capture IP address received from nslookup query
+      }								#end of if block
+      unless ( $iana_org_received eq $iana_org_expected ) {
+         print "$CHECK_NAME WARN - Did not receive the expected IP address when performing DNS query against iana.org using primary DNS server $wan_dns1. Please check the DNS server settings on the router.  Expected=$iana_org_expected Received=$iana_org_received | $perf_data \n";
+         exit $WARN;
+      }								#end of unless block
+   }								#end of while loop
+   close IN;							#close filehandle
    #
    #
    # Try to query the secondary name server 
-   # We use the example.com domain, because it should always exist.
-   $cmd = "nslookup example.com $wan_dns2";	#define command to be run
-   print "running $cmd \n" if ($verbose eq "yes");
-   ($out, $err, $exit) = $ssh->cmd($cmd);
-   #
-   # If there was nothing on STDOUT in the above command, put a dummy value
-   # into the $out variable to ensure we don't get an error message when 
-   # we try to use an undefined variable.
-   $out = "blah blah blah" unless $out;
-   #
-   # Alert if bad reply from secondary DNS server
-   if ( $out =~ /Server: +Unknown/i ) {
-      print "$CHECK_NAME WARN - no reply to DNS lookup from secondary DNS server $wan_dns2.  Please check the DNS server settings on the router. \n";
-      exit $WARN;
-   }								#end of if block
-   #
-   # Alert if bad reply from secondary DNS server
-   if ( $out =~ /Non-existent domain/i ) {
-      print "$CHECK_NAME WARN - Received Non-existent domain reply to DNS lookup from secondary DNS server $wan_dns2.  Please check the DNS server settings on the router. \n";
-      exit $WARN;
-   }								#end of if block
-   #
-   # Alert if bad reply from secondary DNS server
-   # We are making the assumption that the IP address of example.com has not changed from 192.0.43.10
-   unless ( $out =~ /192.0.43.10/ ) {
-      print "$CHECK_NAME WARN - Did not receive the expected IP address when performing DNS query against example.com using secondary DNS server $wan_dns2. Please check the DNS server settings on the router. \n";
-      exit $WARN;
-   }								#end of unless block
+   # We use the iana.org domain, because it should always exist.
+   $cmd = "nslookup iana.org $wan_dns2 | tail -n 1";
+   print "   running command $cmd \n" if ($verbose eq "yes");
+   open(IN,"/usr/bin/ssh -q -p $params{port} $params{user}\@$host $cmd |");
+   while (<IN>) {
+      #
+      # Alert if bad reply from secondary DNS server
+      if ( /Server: +Unknown/i ) {
+         print "$CHECK_NAME WARN - no reply to DNS lookup from secondary DNS server $wan_dns2.  Please check the DNS server settings on the router. | $perf_data \n";
+         exit $WARN;
+      }								#end of if block
+      #
+      # Alert if bad reply from secondary DNS server
+      if ( /Non-existent domain/i ) {
+         print "$CHECK_NAME WARN - Received Non-existent domain reply to DNS lookup from secondary DNS server $wan_dns2.  Please check the DNS server settings on the router. | $perf_data \n";
+         exit $WARN;
+      }								#end of if block
+      #
+      # Alert if bad reply from secondary DNS server
+      # We are making the assumption that the IP address of iana.org has not changed from 192.0.43.8
+      if ( /([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)/ ) {
+         $iana_org_received = $1;				#capture IP address received from nslookup query
+      }								#end of if block
+      unless ( $iana_org_received eq $iana_org_expected ) {
+         print "$CHECK_NAME WARN - Did not receive the expected IP address when performing DNS query against iana.org using secondary DNS server $wan_dns2. Please check the DNS server settings on the router.  Expected=$iana_org_expected Received=$iana_org_received | $perf_data \n";
+         exit $WARN;
+      }								#end of unless block
+   }								#end of while loop
+   close IN;							#close filehandle
 }								#end of subroutine
 
 
@@ -1315,10 +1399,18 @@ sub check_dns {
 
 
 sub print_output {
+
+   # The nagios performance data will be the same for all the outputs, so just put it in a variable that can be use by all the output options
+   # The format is:  label=value[UOM];[warn];[crit];[min];[max]
+   # On the "label=value" section is required.  The warn|crit|min|max entries are optional.
+   # You can have multiple items of perf data, just separate each section with a space
+   # UOM is Units Of Measurement.    Can be s=seconds B=bytes MB=megabytes %=percent c=counter
+   $perf_data = "cpu_load_15min=$cpu_load_15min;;;; memused=$mem_used;;;; wireless_clients=$wireless_clients;;; ";
+   #
    #
    # we only get this far if there were no problems
    #
-   print "$CHECK_NAME OK.  cpuload=$cpu_load_15min\% memused=$mem_used\% cron=$cron_status snmp=$snmp_status telnet=$telnet_status ssh=$ssh_status sshd_port=$sshd_port sshd_wanport=$sshd_wanport wireless_clients=$wireless_clients encryption=$wireless_encryption wan_ipaddr=$wan_ipaddr wan_gateway=$wan_gateway DNS=$wan_dns1,$wan_dns2 syslog_host=$syslogd_rem_ip ntp_server=$ntp_rem_ip \n";
+   print "$CHECK_NAME OK.  cpuload=$cpu_load_15min\% memused=$mem_used\% crond=$crond_status snmpd=$snmpd_status telnetd=$telnetd_status sshd=$sshd_status sshd_port=$sshd_port sshd_wanport=$sshd_wanport wireless_clients=$wireless_clients encryption=$wireless_encryption wan_ipaddr=$wan_ipaddr wan_gateway=$wan_gateway DNS=$wan_dns1,$wan_dns2 syslog_host=$syslogd_rem_ip ntp_server=$ntp_rem_ip | $perf_data \n";
    exit $OK;
 }                                                                       #end of subroutine
 
@@ -1333,8 +1425,11 @@ sub print_output {
 #
 #
 sanity_checks;					#check for required command line parameters
-check_name_resolution;				#ensure name resolution exists for router
+#check_name_resolution;				#ensure name resolution exists for router
 ssh_to_router;					#connect to the router via SSH
+check_cpu_load;					#check CPU    utilization
+check_memory;					#check memory utilization
+check_wireless;					#check wireless encryption protocol and number of connected wireless clients
 check_remote_management_via_http;		#confirm remote access via Internet to HTTP management interface is disabled
 check_remote_management_via_ssh; 	 	#confirm remote access via Internet to SSH  management interface is enabled
 check_cron_daemon;				#confirm cron daemon is running
@@ -1344,11 +1439,7 @@ check_ssh_daemon;				#confirm the ssh daemon is enabled
 check_syslog_daemon;				#confirm the syslog daemon is enabled and logging to a remote host
 check_ntp_daemon;				#confirm the ntp daemon is enabled and syncing time against a remote host
 check_snmp_daemon;				#confirm the snmp daemon is enabled
-check_cpu_load;					#check CPU    utilization
-check_memory;					#check memory utilization
-check_wireless;					#check wireless encryption protocol and number of connected wireless clients
 check_internet_connection;			#confirm the router can ping its upstream router (ie Internet connection)
 check_dhcp;					#see if the DHCP server is enabled
 check_dns;					#confirm primary/secondary DNS servers can  perform name resolution
 print_output;					#print the script output 
-
